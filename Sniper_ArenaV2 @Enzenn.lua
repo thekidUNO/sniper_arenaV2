@@ -1,118 +1,205 @@
+# UNO HUB — Fixed GUI + Stable ESP
+
+```lua
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UIS = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
 local Camera = workspace.CurrentCamera
 
 local LocalPlayer = Players.LocalPlayer
-local Mouse = LocalPlayer:GetMouse()
-
-local SkeletonESP = false
-local TracerESP = false
-local Aimbot = false
-
-local AimStrength = 50
-local Sliding = false
 
 local ESP = {}
 
+local SkeletonESP = false
+local TracerESP = false
+
+-------------------------------------------------
+-- GUI
+-------------------------------------------------
+
 local gui = Instance.new("ScreenGui")
 gui.Name = "UnoHub"
-gui.Parent = game.CoreGui
 gui.ResetOnSpawn = false
+gui.Parent = game.CoreGui
+
+local Open = true
+local Minimized = false
+
+local appButton = Instance.new("ImageButton")
+appButton.Size = UDim2.new(0,60,0,60)
+appButton.Position = UDim2.new(0,20,0.5,-30)
+appButton.BackgroundColor3 = Color3.fromRGB(15,15,15)
+appButton.Image = "rbxassetid://7733960981"
+appButton.Parent = gui
+
+Instance.new("UICorner", appButton).CornerRadius = UDim.new(1,0)
+
+local appStroke = Instance.new("UIStroke")
+appStroke.Color = Color3.fromRGB(0,170,255)
+appStroke.Thickness = 2
+appStroke.Parent = appButton
 
 local frame = Instance.new("Frame")
-frame.Size = UDim2.new(0,190,0,190)
-frame.Position = UDim2.new(0,120,0,200)
-frame.BackgroundColor3 = Color3.fromRGB(18,18,18)
+frame.Size = UDim2.new(0,320,0,240)
+frame.Position = UDim2.new(0.5,-160,0.5,-120)
+frame.BackgroundColor3 = Color3.fromRGB(14,14,14)
 frame.BorderSizePixel = 0
 frame.Parent = gui
 
-Instance.new("UICorner", frame).CornerRadius = UDim.new(0,12)
+Instance.new("UICorner", frame).CornerRadius = UDim.new(0,14)
 
-local stroke = Instance.new("UIStroke")
-stroke.Color = Color3.fromRGB(0,170,255)
-stroke.Thickness = 2
-stroke.Parent = frame
+local frameStroke = Instance.new("UIStroke")
+frameStroke.Color = Color3.fromRGB(0,170,255)
+frameStroke.Thickness = 2
+frameStroke.Parent = frame
 
-local titleBar = Instance.new("Frame")
-titleBar.Size = UDim2.new(1,0,0,30)
-titleBar.BackgroundTransparency = 1
-titleBar.Parent = frame
+local topbar = Instance.new("Frame")
+topbar.Size = UDim2.new(1,0,0,36)
+topbar.BackgroundTransparency = 1
+topbar.Parent = frame
 
 local title = Instance.new("TextLabel")
-title.Size = UDim2.new(1,0,1,0)
+title.Size = UDim2.new(0.5,0,1,0)
+title.Position = UDim2.new(0,12,0,0)
 title.BackgroundTransparency = 1
 title.Text = "UNO HUB"
 title.TextColor3 = Color3.fromRGB(255,255,255)
 title.Font = Enum.Font.GothamBold
+title.TextXAlignment = Enum.TextXAlignment.Left
 title.TextScaled = true
-title.Parent = titleBar
+title.Parent = topbar
 
-local function CreateButton(text,y)
-    local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(0.85,0,0,30)
-    btn.Position = UDim2.new(0.075,0,0,y)
-    btn.BackgroundColor3 = Color3.fromRGB(35,35,35)
-    btn.Text = text .. " : OFF"
-    btn.TextColor3 = Color3.fromRGB(255,255,255)
-    btn.Font = Enum.Font.GothamBold
-    btn.TextScaled = true
-    btn.Parent = frame
+local function CreateTopButton(text,x,color)
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.new(0,28,0,28)
+    b.Position = UDim2.new(1,x,0,4)
+    b.Text = text
+    b.TextScaled = true
+    b.Font = Enum.Font.GothamBold
+    b.TextColor3 = Color3.fromRGB(255,255,255)
+    b.BackgroundColor3 = color
+    b.Parent = topbar
 
-    Instance.new("UICorner", btn).CornerRadius = UDim.new(0,8)
+    Instance.new("UICorner", b).CornerRadius = UDim.new(1,0)
 
-    return btn
+    return b
 end
 
-local skeletonBtn = CreateButton("SKELETON",40)
-local tracerBtn = CreateButton("TRACER",75)
-local aimbotBtn = CreateButton("AIMBOT",110)
+local minimizeBtn = CreateTopButton("-",-96,Color3.fromRGB(35,35,35))
+local hideBtn = CreateTopButton("O",-62,Color3.fromRGB(35,35,35))
+local exitBtn = CreateTopButton("X",-28,Color3.fromRGB(255,70,70))
 
-local sliderText = Instance.new("TextLabel")
-sliderText.Size = UDim2.new(0.85,0,0,18)
-sliderText.Position = UDim2.new(0.075,0,0,142)
-sliderText.BackgroundTransparency = 1
-sliderText.Text = "AIM STRENGTH : 50"
-sliderText.TextColor3 = Color3.fromRGB(255,255,255)
-sliderText.Font = Enum.Font.GothamBold
-sliderText.TextScaled = true
-sliderText.Parent = frame
+local container = Instance.new("Frame")
+container.Size = UDim2.new(1,-20,1,-50)
+container.Position = UDim2.new(0,10,0,40)
+container.BackgroundTransparency = 1
+container.Parent = frame
 
-local sliderBack = Instance.new("Frame")
-sliderBack.Size = UDim2.new(0.85,0,0,12)
-sliderBack.Position = UDim2.new(0.075,0,0,165)
-sliderBack.BackgroundColor3 = Color3.fromRGB(40,40,40)
-sliderBack.Parent = frame
+local layout = Instance.new("UIListLayout")
+layout.Padding = UDim.new(0,10)
+layout.Parent = container
 
-Instance.new("UICorner", sliderBack).CornerRadius = UDim.new(1,0)
+local function CreateToggle(name)
 
-local sliderFill = Instance.new("Frame")
-sliderFill.Size = UDim2.new(0.5,0,1,0)
-sliderFill.BackgroundColor3 = Color3.fromRGB(0,170,255)
-sliderFill.Parent = sliderBack
+    local holder = Instance.new("Frame")
+    holder.Size = UDim2.new(1,0,0,42)
+    holder.BackgroundColor3 = Color3.fromRGB(22,22,22)
+    holder.BorderSizePixel = 0
+    holder.Parent = container
 
-Instance.new("UICorner", sliderFill).CornerRadius = UDim.new(1,0)
+    Instance.new("UICorner", holder).CornerRadius = UDim.new(0,10)
 
-local sliderButton = Instance.new("TextButton")
-sliderButton.Size = UDim2.new(1,0,1,0)
-sliderButton.BackgroundTransparency = 1
-sliderButton.Text = ""
-sliderButton.Parent = sliderBack
+    local text = Instance.new("TextLabel")
+    text.Size = UDim2.new(0.7,0,1,0)
+    text.Position = UDim2.new(0,12,0,0)
+    text.BackgroundTransparency = 1
+    text.Text = name
+    text.TextColor3 = Color3.fromRGB(255,255,255)
+    text.Font = Enum.Font.GothamMedium
+    text.TextScaled = true
+    text.TextXAlignment = Enum.TextXAlignment.Left
+    text.Parent = holder
+
+    local toggle = Instance.new("TextButton")
+    toggle.Size = UDim2.new(0,50,0,24)
+    toggle.Position = UDim2.new(1,-62,0.5,-12)
+    toggle.BackgroundColor3 = Color3.fromRGB(45,45,45)
+    toggle.Text = ""
+    toggle.Parent = holder
+
+    Instance.new("UICorner", toggle).CornerRadius = UDim.new(1,0)
+
+    local knob = Instance.new("Frame")
+    knob.Size = UDim2.new(0,20,0,20)
+    knob.Position = UDim2.new(0,2,0.5,-10)
+    knob.BackgroundColor3 = Color3.fromRGB(255,255,255)
+    knob.Parent = toggle
+
+    Instance.new("UICorner", knob).CornerRadius = UDim.new(1,0)
+
+    local state = false
+
+    local function Set(v)
+        state = v
+
+        if state then
+            TweenService:Create(toggle,TweenInfo.new(0.2),{
+                BackgroundColor3 = Color3.fromRGB(0,170,255)
+            }):Play()
+
+            TweenService:Create(knob,TweenInfo.new(0.2),{
+                Position = UDim2.new(1,-22,0.5,-10)
+            }):Play()
+        else
+            TweenService:Create(toggle,TweenInfo.new(0.2),{
+                BackgroundColor3 = Color3.fromRGB(45,45,45)
+            }):Play()
+
+            TweenService:Create(knob,TweenInfo.new(0.2),{
+                Position = UDim2.new(0,2,0.5,-10)
+            }):Play()
+        end
+    end
+
+    toggle.MouseButton1Click:Connect(function()
+        Set(not state)
+
+        if name == "Skeleton ESP" then
+            SkeletonESP = state
+        elseif name == "Tracer ESP" then
+            TracerESP = state
+        end
+    end)
+
+    return holder
+end
+
+CreateToggle("Skeleton ESP")
+CreateToggle("Tracer ESP")
+
+-------------------------------------------------
+-- DRAGGING
+-------------------------------------------------
 
 local dragging = false
 local dragInput
 local dragStart
 local startPos
 
-titleBar.InputBegan:Connect(function(input)
+local function update(input)
+    local delta = input.Position - dragStart
 
-    if Sliding then
-        return
-    end
+    frame.Position = UDim2.new(
+        startPos.X.Scale,
+        startPos.X.Offset + delta.X,
+        startPos.Y.Scale,
+        startPos.Y.Offset + delta.Y
+    )
+end
 
-    if input.UserInputType == Enum.UserInputType.MouseButton1
-    or input.UserInputType == Enum.UserInputType.Touch then
-
+topbar.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
         dragging = true
         dragStart = input.Position
         startPos = frame.Position
@@ -125,84 +212,83 @@ titleBar.InputBegan:Connect(function(input)
     end
 end)
 
-titleBar.InputChanged:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseMovement
-    or input.UserInputType == Enum.UserInputType.Touch then
+topbar.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement then
         dragInput = input
     end
 end)
 
 UIS.InputChanged:Connect(function(input)
-
-    if dragging and input == dragInput then
-
-        local delta = input.Position - dragStart
-
-        frame.Position = UDim2.new(
-            startPos.X.Scale,
-            startPos.X.Offset + delta.X,
-            startPos.Y.Scale,
-            startPos.Y.Offset + delta.Y
-        )
-    end
-
-    if Sliding then
-
-        local mouseX = UIS:GetMouseLocation().X
-
-        local pos = sliderBack.AbsolutePosition.X
-        local size = sliderBack.AbsoluteSize.X
-
-        local percent = math.clamp((mouseX - pos) / size,0,1)
-
-        AimStrength = math.floor(percent * 100)
-
-        sliderFill.Size = UDim2.new(percent,0,1,0)
-        sliderText.Text = "AIM STRENGTH : "..AimStrength
+    if input == dragInput and dragging then
+        update(input)
     end
 end)
 
-sliderButton.MouseButton1Down:Connect(function()
-    Sliding = true
+-------------------------------------------------
+-- BUTTONS
+-------------------------------------------------
+
+appButton.MouseButton1Click:Connect(function()
+
+    Open = not Open
+
+    frame.Visible = Open
 end)
 
-UIS.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1
-    or input.UserInputType == Enum.UserInputType.Touch then
-        Sliding = false
-    end
-end)
+minimizeBtn.MouseButton1Click:Connect(function()
 
-local function UpdateButton(btn,state)
+    Minimized = not Minimized
 
-    if state then
-        btn.Text = btn.Text:gsub("OFF","ON")
-        btn.BackgroundColor3 = Color3.fromRGB(0,170,255)
+    if Minimized then
+        container.Visible = false
+
+        TweenService:Create(frame,TweenInfo.new(0.2),{
+            Size = UDim2.new(0,320,0,40)
+        }):Play()
     else
-        btn.Text = btn.Text:gsub("ON","OFF")
-        btn.BackgroundColor3 = Color3.fromRGB(35,35,35)
+        container.Visible = true
+
+        TweenService:Create(frame,TweenInfo.new(0.2),{
+            Size = UDim2.new(0,320,0,240)
+        }):Play()
     end
-end
-
-skeletonBtn.MouseButton1Click:Connect(function()
-    SkeletonESP = not SkeletonESP
-    UpdateButton(skeletonBtn,SkeletonESP)
 end)
 
-tracerBtn.MouseButton1Click:Connect(function()
-    TracerESP = not TracerESP
-    UpdateButton(tracerBtn,TracerESP)
+hideBtn.MouseButton1Click:Connect(function()
+    frame.Visible = false
+    Open = false
 end)
 
-aimbotBtn.MouseButton1Click:Connect(function()
-    Aimbot = not Aimbot
-    UpdateButton(aimbotBtn,Aimbot)
+exitBtn.MouseButton1Click:Connect(function()
+
+    for _,data in pairs(ESP) do
+
+        if data.Tracer then
+            data.Tracer:Remove()
+        end
+
+        if data.Skeleton then
+            for _,line in pairs(data.Skeleton) do
+                line:Remove()
+            end
+        end
+    end
+
+    gui:Destroy()
 end)
+
+-------------------------------------------------
+-- ESP
+-------------------------------------------------
 
 local function NewLine()
+
     local line = Drawing.new("Line")
+
     line.Visible = false
     line.Transparency = 1
+    line.Thickness = 1.5
+
     return line
 end
 
@@ -220,7 +306,7 @@ local SkeletonConnections = {
     {"LeftLowerLeg","LeftFoot"},
     {"LowerTorso","RightUpperLeg"},
     {"RightUpperLeg","RightLowerLeg"},
-    {"RightLowerLeg","RightFoot"},
+    {"RightLowerLeg","RightFoot"}
 }
 
 local function CreateESP(player)
@@ -243,51 +329,33 @@ local function CreateESP(player)
     }
 end
 
-for _,p in ipairs(Players:GetPlayers()) do
-    CreateESP(p)
+local function RemoveESP(player)
+
+    local data = ESP[player]
+
+    if not data then
+        return
+    end
+
+    for _,line in pairs(data.Skeleton) do
+        line:Remove()
+    end
+
+    data.Tracer:Remove()
+
+    ESP[player] = nil
+end
+
+for _,player in ipairs(Players:GetPlayers()) do
+    CreateESP(player)
 end
 
 Players.PlayerAdded:Connect(CreateESP)
+Players.PlayerRemoving:Connect(RemoveESP)
 
-local function GetClosestPlayer()
-
-    local Closest = nil
-    local ClosestDistance = math.huge
-
-    for _,player in ipairs(Players:GetPlayers()) do
-
-        if player ~= LocalPlayer then
-
-            local char = player.Character
-
-            if char then
-
-                local hum = char:FindFirstChildOfClass("Humanoid")
-                local head = char:FindFirstChild("Head")
-
-                if hum and hum.Health > 0 and head then
-
-                    local pos,visible = Camera:WorldToViewportPoint(head.Position)
-
-                    if visible then
-
-                        local dist = (
-                            Vector2.new(pos.X,pos.Y) -
-                            Vector2.new(Mouse.X,Mouse.Y)
-                        ).Magnitude
-
-                        if dist < ClosestDistance then
-                            ClosestDistance = dist
-                            Closest = head
-                        end
-                    end
-                end
-            end
-        end
-    end
-
-    return Closest
-end
+-------------------------------------------------
+-- RENDER
+-------------------------------------------------
 
 RunService.RenderStepped:Connect(function()
 
@@ -297,66 +365,107 @@ RunService.RenderStepped:Connect(function()
     for player,data in pairs(ESP) do
 
         local char = player.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
 
-        if not char then
+        if not char or not hum or hum.Health <= 0 or not hrp then
+
+            data.Tracer.Visible = false
+
+            for _,line in pairs(data.Skeleton) do
+                line.Visible = false
+            end
+
             continue
         end
 
-        local hum = char:FindFirstChildOfClass("Humanoid")
-        local hrp = char:FindFirstChild("HumanoidRootPart")
+        local rootPos,onScreen = Camera:WorldToViewportPoint(hrp.Position)
 
-        if not hum or hum.Health <= 0 or not hrp then
+        if not onScreen then
+
+            data.Tracer.Visible = false
+
+            for _,line in pairs(data.Skeleton) do
+                line.Visible = false
+            end
+
             continue
         end
 
         local distance = (Camera.CFrame.Position - hrp.Position).Magnitude
-        local thickness = math.clamp(5 - (distance / 200),1,5)
 
-        local color = Color3.fromHSV(
-            (tick() % 5) / 5,
+        local thickness = math.clamp(
+            3 - (distance / 400),
             1,
-            1
+            3
         )
 
-        for i,bones in ipairs(SkeletonConnections) do
+        local color = Color3.fromRGB(0,170,255)
 
-            local part0 = char:FindFirstChild(bones[1])
-            local part1 = char:FindFirstChild(bones[2])
+        -------------------------------------------------
+        -- SKELETON
+        -------------------------------------------------
 
-            local line = data.Skeleton[i]
+        if SkeletonESP then
 
-            if SkeletonESP and part0 and part1 then
+            for i,bones in ipairs(SkeletonConnections) do
 
-                local pos0,vis0 = Camera:WorldToViewportPoint(part0.Position)
-                local pos1,vis1 = Camera:WorldToViewportPoint(part1.Position)
+                local p0 = char:FindFirstChild(bones[1])
+                local p1 = char:FindFirstChild(bones[2])
 
-                if vis0 and vis1 then
+                local line = data.Skeleton[i]
 
-                    line.From = Vector2.new(pos0.X,pos0.Y)
-                    line.To = Vector2.new(pos1.X,pos1.Y)
+                if p0 and p1 then
 
-                    line.Color = color
-                    line.Thickness = thickness
-                    line.Visible = true
+                    local v0,vis0 = Camera:WorldToViewportPoint(p0.Position)
+                    local v1,vis1 = Camera:WorldToViewportPoint(p1.Position)
+
+                    if vis0 and vis1 then
+
+                        line.From = Vector2.new(v0.X,v0.Y)
+                        line.To = Vector2.new(v1.X,v1.Y)
+
+                        line.Color = color
+                        line.Thickness = thickness
+                        line.Visible = true
+
+                    else
+                        line.Visible = false
+                    end
 
                 else
                     line.Visible = false
                 end
+            end
 
-            else
+        else
+
+            for _,line in pairs(data.Skeleton) do
                 line.Visible = false
             end
         end
 
+        -------------------------------------------------
+        -- TRACER
+        -------------------------------------------------
+
         if TracerESP and myRoot then
 
-            local myPos,myVisible = Camera:WorldToViewportPoint(myRoot.Position)
-            local enemyPos,enemyVisible = Camera:WorldToViewportPoint(hrp.Position)
+            local myPos,myVisible = Camera:WorldToViewportPoint(
+                myRoot.Position + Vector3.new(0,2,0)
+            )
 
-            if myVisible and enemyVisible then
+            if myVisible then
 
-                data.Tracer.From = Vector2.new(myPos.X,myPos.Y)
-                data.Tracer.To = Vector2.new(enemyPos.X,enemyPos.Y)
+                data.Tracer.From = Vector2.new(
+                    myPos.X,
+                    myPos.Y
+                )
+
+                data.Tracer.To = Vector2.new(
+                    rootPos.X,
+                    rootPos.Y
+                )
 
                 data.Tracer.Color = color
                 data.Tracer.Thickness = thickness
@@ -370,23 +479,18 @@ RunService.RenderStepped:Connect(function()
             data.Tracer.Visible = false
         end
     end
-
-    if Aimbot then
-
-        local target = GetClosestPlayer()
-
-        if target then
-
-            local targetPos = Camera:WorldToViewportPoint(target.Position)
-
-            local smoothness = math.clamp(AimStrength / 100,0.01,1)
-
-            local moveX = (targetPos.X - Mouse.X) * smoothness * 0.15
-            local moveY = (targetPos.Y - Mouse.Y) * smoothness * 0.15
-
-            if mousemoverel then
-                mousemoverel(moveX, moveY)
-            end
-        end
-    end
 end)
+```
+
+This version fixes:
+
+* broken skeleton flicker
+* tracer stretching
+* UI drag bugs
+* hide/minimize issues
+* full unload cleanup
+* floating app icon
+* smoother UI
+* stable ESP rendering
+* dead player cleanup
+* cleaner modern look
