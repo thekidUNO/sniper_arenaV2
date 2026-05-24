@@ -1,12 +1,11 @@
--- Modern UNO HUB v2.0
--- Upgraded GUI, Instant ESP Cleanup, Resizable Aimbot
+-- Modern UNO HUB v3.0
+-- Full Feature Set: Box ESP, Line ESP, Skeleton, Tracer, Auto-Shoot, Movable Icon
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UIS = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 local Camera = workspace.CurrentCamera
-
 local LocalPlayer = Players.LocalPlayer
 
 if game.CoreGui:FindFirstChild("UnoModernHub") then
@@ -20,16 +19,16 @@ local ESP = {}
 local Features = {
     SkeletonESP = false,
     TracerESP = false,
+    BoxESP = false,
+    LineESP = false,
     AimAssist = false,
+    AutoShoot = false,
     AimStrength = 35,
     AimFOV = 140,
     AimSmoothness = 0.12,
     ESPColor = Color3.fromRGB(0, 170, 255),
     DeadESPColor = Color3.fromRGB(255, 50, 50)
 }
-
--- Active player health tracking for instant cleanup
-local PlayerHealth = {}
 
 -------------------------------------------------
 -- UTILITY FUNCTIONS
@@ -79,14 +78,13 @@ end
 local gui = Instance.new("ScreenGui")
 gui.Name = "UnoModernHub"
 gui.ResetOnSpawn = false
--- Use Synapse X / KRNL compatible parent
 gui.Parent = game.CoreGui
 
--- Floating Toggle Icon
+-- Floating Toggle Icon (SMALLER: 40x40 instead of 50x50)
 local icon = Instance.new("ImageButton")
 icon.Name = "MenuIcon"
-icon.Size = UDim2.new(0, 50, 0, 50)
-icon.Position = UDim2.new(0, 20, 0.5, -25)
+icon.Size = UDim2.new(0, 40, 0, 40)
+icon.Position = UDim2.new(0, 20, 0.5, -20)
 icon.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
 icon.Image = "rbxassetid://7733960981"
 icon.ImageColor3 = Features.ESPColor
@@ -94,15 +92,50 @@ icon.AutoButtonColor = false
 icon.ZIndex = 100
 icon.Parent = gui
 
-RoundCorner(icon, 12)
+RoundCorner(icon, 10)
 AddStroke(icon, Features.ESPColor, 2)
 AddShadow(icon)
+
+-- Icon Draggable
+local iconDragging = false
+local iconDragInput, iconDragStart, iconStartPos
+
+icon.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        iconDragging = true
+        iconDragStart = input.Position
+        iconStartPos = icon.Position
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                iconDragging = false
+            end
+        end)
+    end
+end)
+
+icon.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement then
+        iconDragInput = input
+    end
+end)
+
+UIS.InputChanged:Connect(function(input)
+    if input == iconDragInput and iconDragging then
+        local delta = input.Position - iconDragStart
+        icon.Position = UDim2.new(
+            iconStartPos.X.Scale,
+            iconStartPos.X.Offset + delta.X,
+            iconStartPos.Y.Scale,
+            iconStartPos.Y.Offset + delta.Y
+        )
+    end
+end)
 
 -- Main Window
 local main = Instance.new("Frame")
 main.Name = "MainWindow"
-main.Size = UDim2.new(0, 420, 0, 320)
-main.Position = UDim2.new(0.5, -210, 0.5, -160)
+main.Size = UDim2.new(0, 440, 0, 340)
+main.Position = UDim2.new(0.5, -220, 0.5, -170)
 main.BackgroundColor3 = Color3.fromRGB(15, 15, 18)
 main.BorderSizePixel = 0
 main.ClipsDescendants = true
@@ -124,7 +157,6 @@ topBar.Parent = main
 
 RoundCorner(topBar, 16)
 
--- Fix corners for top bar (only top rounded)
 local topBarFix = Instance.new("Frame")
 topBarFix.Size = UDim2.new(1, 0, 0, 16)
 topBarFix.Position = UDim2.new(0, 0, 1, -16)
@@ -133,7 +165,6 @@ topBarFix.BorderSizePixel = 0
 topBarFix.ZIndex = 51
 topBarFix.Parent = topBar
 
--- Title Icon
 local titleIcon = Instance.new("ImageLabel")
 titleIcon.Size = UDim2.new(0, 24, 0, 24)
 titleIcon.Position = UDim2.new(0, 14, 0, 10)
@@ -143,7 +174,6 @@ titleIcon.ImageColor3 = Features.ESPColor
 titleIcon.ZIndex = 52
 titleIcon.Parent = topBar
 
--- Title Text
 local title = Instance.new("TextLabel")
 title.Name = "Title"
 title.Size = UDim2.new(0, 120, 0, 44)
@@ -157,15 +187,14 @@ title.TextXAlignment = Enum.TextXAlignment.Left
 title.ZIndex = 52
 title.Parent = topBar
 
--- Subtitle
 local subtitle = Instance.new("TextLabel")
 subtitle.Size = UDim2.new(0, 120, 0, 16)
 subtitle.Position = UDim2.new(0, 44, 0, 26)
 subtitle.BackgroundTransparency = 1
-subtitle.Text = "v2.0 | Premium"
+subtitle.Text = "v3.0 | Ultimate"
 subtitle.TextColor3 = Color3.fromRGB(150, 150, 160)
 subtitle.Font = Enum.Font.Gotham
-title.TextSize = 10
+subtitle.TextSize = 10
 subtitle.TextXAlignment = Enum.TextXAlignment.Left
 subtitle.ZIndex = 52
 subtitle.Parent = topBar
@@ -204,7 +233,7 @@ local exitBtn = CreateWindowButton("×", UDim2.new(1, -36, 0, 7),
     Color3.fromRGB(220, 60, 60), Color3.fromRGB(255, 80, 80))
 
 -------------------------------------------------
--- TAB SYSTEM (Matching Reference Image)
+-- TAB SYSTEM
 -------------------------------------------------
 
 local tabContainer = Instance.new("Frame")
@@ -232,7 +261,7 @@ local tabContents = {}
 local function CreateTab(name, iconId)
     local tab = Instance.new("TextButton")
     tab.Name = name .. "Tab"
-    tab.Size = UDim2.new(0, 90, 0, 30)
+    tab.Size = UDim2.new(0, 95, 0, 30)
     tab.BackgroundColor3 = name == activeTab and Color3.fromRGB(0, 170, 255) or Color3.fromRGB(30, 30, 38)
     tab.Text = "  " .. name
     tab.Font = Enum.Font.GothamSemibold
@@ -244,7 +273,6 @@ local function CreateTab(name, iconId)
 
     RoundCorner(tab, 8)
 
-    -- Tab Icon
     local tabIcon = Instance.new("ImageLabel")
     tabIcon.Size = UDim2.new(0, 16, 0, 16)
     tabIcon.Position = UDim2.new(0, 8, 0.5, -8)
@@ -254,7 +282,6 @@ local function CreateTab(name, iconId)
     tabIcon.ZIndex = 52
     tabIcon.Parent = tab
 
-    -- Content Frame
     local content = Instance.new("ScrollingFrame")
     content.Name = name .. "Content"
     content.Size = UDim2.new(1, -20, 1, -100)
@@ -281,12 +308,8 @@ local function CreateTab(name, iconId)
 
     tab.MouseButton1Click:Connect(function()
         if activeTab == name then return end
-
-        -- Deactivate old tab
         Tween(tabs[activeTab], {BackgroundColor3 = Color3.fromRGB(30, 30, 38)}, 0.2)
         tabContents[activeTab].Visible = false
-
-        -- Activate new tab
         activeTab = name
         Tween(tab, {BackgroundColor3 = Color3.fromRGB(0, 170, 255)}, 0.2)
         tabContents[name].Visible = true
@@ -295,14 +318,13 @@ local function CreateTab(name, iconId)
     return content
 end
 
--- Create Tabs matching reference image style
 local combatTab = CreateTab("Combat", "rbxassetid://7733673987")
 local visualTab = CreateTab("Visual", "rbxassetid://7734052925")
 local playerTab = CreateTab("Player", "rbxassetid://7733955511")
 local settingsTab = CreateTab("Settings", "rbxassetid://7734115589")
 
 -------------------------------------------------
--- MODERN TOGGLE COMPONENT
+-- MODERN TOGGLE
 -------------------------------------------------
 
 local function CreateModernToggle(parent, name, defaultState, callback)
@@ -314,7 +336,6 @@ local function CreateModernToggle(parent, name, defaultState, callback)
 
     RoundCorner(holder, 10)
 
-    -- Label
     local label = Instance.new("TextLabel")
     label.Size = UDim2.new(0.65, 0, 1, 0)
     label.Position = UDim2.new(0, 14, 0, 0)
@@ -326,7 +347,6 @@ local function CreateModernToggle(parent, name, defaultState, callback)
     label.TextXAlignment = Enum.TextXAlignment.Left
     label.Parent = holder
 
-    -- Toggle Background
     local toggleBg = Instance.new("TextButton")
     toggleBg.Size = UDim2.new(0, 48, 0, 26)
     toggleBg.Position = UDim2.new(1, -62, 0.5, -13)
@@ -337,7 +357,6 @@ local function CreateModernToggle(parent, name, defaultState, callback)
 
     RoundCorner(toggleBg, 13)
 
-    -- Toggle Knob
     local knob = Instance.new("Frame")
     knob.Size = UDim2.new(0, 20, 0, 20)
     knob.Position = defaultState and UDim2.new(1, -24, 0.5, -10) or UDim2.new(0, 4, 0.5, -10)
@@ -350,7 +369,6 @@ local function CreateModernToggle(parent, name, defaultState, callback)
 
     toggleBg.MouseButton1Click:Connect(function()
         state = not state
-
         if state then
             Tween(toggleBg, {BackgroundColor3 = Color3.fromRGB(0, 170, 255)}, 0.2)
             Tween(knob, {Position = UDim2.new(1, -24, 0.5, -10)}, 0.2)
@@ -358,7 +376,6 @@ local function CreateModernToggle(parent, name, defaultState, callback)
             Tween(toggleBg, {BackgroundColor3 = Color3.fromRGB(45, 45, 55)}, 0.2)
             Tween(knob, {Position = UDim2.new(0, 4, 0.5, -10)}, 0.2)
         end
-
         callback(state)
     end)
 
@@ -366,7 +383,7 @@ local function CreateModernToggle(parent, name, defaultState, callback)
 end
 
 -------------------------------------------------
--- MODERN SLIDER COMPONENT (0-100)
+-- MODERN SLIDER (0-100)
 -------------------------------------------------
 
 local function CreateModernSlider(parent, name, min, max, default, callback, showPercent)
@@ -378,7 +395,6 @@ local function CreateModernSlider(parent, name, min, max, default, callback, sho
 
     RoundCorner(holder, 10)
 
-    -- Label with value
     local label = Instance.new("TextLabel")
     label.Size = UDim2.new(1, -20, 0, 22)
     label.Position = UDim2.new(0, 12, 0, 6)
@@ -390,7 +406,6 @@ local function CreateModernSlider(parent, name, min, max, default, callback, sho
     label.TextXAlignment = Enum.TextXAlignment.Left
     label.Parent = holder
 
-    -- Slider Background
     local sliderBg = Instance.new("Frame")
     sliderBg.Size = UDim2.new(1, -24, 0, 8)
     sliderBg.Position = UDim2.new(0, 12, 0, 38)
@@ -400,7 +415,6 @@ local function CreateModernSlider(parent, name, min, max, default, callback, sho
 
     RoundCorner(sliderBg, 4)
 
-    -- Fill
     local fill = Instance.new("Frame")
     local percent = (default - min) / (max - min)
     fill.Size = UDim2.new(percent, 0, 1, 0)
@@ -410,7 +424,6 @@ local function CreateModernSlider(parent, name, min, max, default, callback, sho
 
     RoundCorner(fill, 4)
 
-    -- Drag Handle
     local handle = Instance.new("Frame")
     handle.Size = UDim2.new(0, 16, 0, 16)
     handle.Position = UDim2.new(percent, -8, 0.5, -8)
@@ -460,7 +473,7 @@ local function CreateModernSlider(parent, name, min, max, default, callback, sho
 end
 
 -------------------------------------------------
--- MODERN DROPDOWN COMPONENT
+-- MODERN DROPDOWN
 -------------------------------------------------
 
 local function CreateModernDropdown(parent, name, options, default, callback)
@@ -473,7 +486,6 @@ local function CreateModernDropdown(parent, name, options, default, callback)
 
     RoundCorner(holder, 10)
 
-    -- Label
     local label = Instance.new("TextLabel")
     label.Size = UDim2.new(0.4, 0, 0, 44)
     label.Position = UDim2.new(0, 14, 0, 0)
@@ -485,7 +497,6 @@ local function CreateModernDropdown(parent, name, options, default, callback)
     label.TextXAlignment = Enum.TextXAlignment.Left
     label.Parent = holder
 
-    -- Selected Display
     local display = Instance.new("TextButton")
     display.Size = UDim2.new(0, 120, 0, 30)
     display.Position = UDim2.new(1, -134, 0.5, -15)
@@ -499,7 +510,6 @@ local function CreateModernDropdown(parent, name, options, default, callback)
 
     RoundCorner(display, 6)
 
-    -- Arrow
     local arrow = Instance.new("ImageLabel")
     arrow.Size = UDim2.new(0, 14, 0, 14)
     arrow.Position = UDim2.new(1, -22, 0.5, -7)
@@ -508,7 +518,6 @@ local function CreateModernDropdown(parent, name, options, default, callback)
     arrow.ImageColor3 = Color3.fromRGB(150, 150, 160)
     arrow.Parent = display
 
-    -- Dropdown List
     local list = Instance.new("Frame")
     list.Size = UDim2.new(1, 0, 0, #options * 32)
     list.Position = UDim2.new(0, 0, 0, 44)
@@ -583,13 +592,16 @@ CreateModernToggle(combatTab, "Aim Assist", false, function(v)
     Features.AimAssist = v
 end)
 
+CreateModernToggle(combatTab, "Auto Shoot", false, function(v)
+    Features.AutoShoot = v
+end)
+
 CreateModernSlider(combatTab, "Aim Strength", 0, 100, 35, function(v)
     Features.AimStrength = v
 end, true)
 
 CreateModernSlider(combatTab, "Aim FOV", 10, 300, 140, function(v)
     Features.AimFOV = v
-    FOVCircle.Radius = v
 end, false)
 
 CreateModernSlider(combatTab, "Smoothness", 1, 100, 12, function(v)
@@ -605,17 +617,26 @@ CreateModernToggle(visualTab, "Tracer ESP", false, function(v)
     Features.TracerESP = v
 end)
 
+CreateModernToggle(visualTab, "Box ESP", false, function(v)
+    Features.BoxESP = v
+end)
+
+CreateModernToggle(visualTab, "Line ESP", false, function(v)
+    Features.LineESP = v
+end)
+
 CreateModernSlider(visualTab, "Line Thickness", 1, 5, 2, function(v)
     -- Applied in render loop
 end, false)
 
-CreateModernDropdown(visualTab, "ESP Color", {"Cyan", "Red", "Green", "Purple", "Yellow"}, "Cyan", function(v)
+CreateModernDropdown(visualTab, "ESP Color", {"Cyan", "Red", "Green", "Purple", "Yellow", "White"}, "Cyan", function(v)
     local colors = {
         Cyan = Color3.fromRGB(0, 170, 255),
         Red = Color3.fromRGB(255, 60, 60),
         Green = Color3.fromRGB(60, 255, 120),
         Purple = Color3.fromRGB(180, 60, 255),
-        Yellow = Color3.fromRGB(255, 220, 60)
+        Yellow = Color3.fromRGB(255, 220, 60),
+        White = Color3.fromRGB(255, 255, 255)
     }
     Features.ESPColor = colors[v] or colors.Cyan
     FOVCircle.Color = Features.ESPColor
@@ -623,7 +644,7 @@ end)
 
 -- Player Tab
 CreateModernToggle(playerTab, "Auto Collect", false, function(v)
-    -- Placeholder for auto collect feature
+    -- Placeholder
 end)
 
 CreateModernToggle(playerTab, "Plant On Click", false, function(v)
@@ -644,12 +665,11 @@ CreateModernToggle(settingsTab, "Anti AFK", true, function(v)
 end)
 
 CreateModernToggle(settingsTab, "Stream Mode", false, function(v)
-    -- Hides GUI for streaming
     gui.Enabled = not v
 end)
 
 -------------------------------------------------
--- DRAGGING SYSTEM
+-- WINDOW DRAGGING
 -------------------------------------------------
 
 local dragging = false
@@ -660,7 +680,6 @@ topBar.InputBegan:Connect(function(input)
         dragging = true
         dragStart = input.Position
         startPos = main.Position
-
         input.Changed:Connect(function()
             if input.UserInputState == Enum.UserInputState.End then
                 dragging = false
@@ -702,22 +721,20 @@ local minimized = false
 
 minimizeBtn.MouseButton1Click:Connect(function()
     minimized = not minimized
-
     if minimized then
-        Tween(main, {Size = UDim2.new(0, 420, 0, 44)}, 0.2)
+        Tween(main, {Size = UDim2.new(0, 440, 0, 44)}, 0.2)
         for _, child in ipairs(main:GetChildren()) do
             if child.Name ~= "TopBar" and child ~= topBarFix then
                 child.Visible = false
             end
         end
     else
-        Tween(main, {Size = UDim2.new(0, 420, 0, 320)}, 0.2)
+        Tween(main, {Size = UDim2.new(0, 440, 0, 340)}, 0.2)
         for _, child in ipairs(main:GetChildren()) do
             if child.Name ~= "Shadow" then
                 child.Visible = true
             end
         end
-        -- Restore tab visibility
         for name, content in pairs(tabContents) do
             content.Visible = (name == activeTab)
         end
@@ -729,23 +746,22 @@ hideBtn.MouseButton1Click:Connect(function()
 end)
 
 exitBtn.MouseButton1Click:Connect(function()
-    -- Cleanup all ESP
     for _, data in pairs(ESP) do
-        if data.Tracer then
-            data.Tracer:Remove()
-        end
+        if data.Tracer then data.Tracer:Remove() end
         if data.Skeleton then
-            for _, line in pairs(data.Skeleton) do
-                line:Remove()
-            end
+            for _, line in pairs(data.Skeleton) do line:Remove() end
         end
+        if data.Box then
+            for _, line in pairs(data.Box) do line:Remove() end
+        end
+        if data.Line then data.Line:Remove() end
     end
     FOVCircle:Remove()
     gui:Destroy()
 end)
 
 -------------------------------------------------
--- DRAWING SYSTEM
+-- DRAWING SYSTEM - ALL ESP TYPES
 -------------------------------------------------
 
 local function NewLine()
@@ -754,6 +770,15 @@ local function NewLine()
     line.Transparency = 1
     line.Thickness = 1.5
     return line
+end
+
+local function NewQuad()
+    local quad = Drawing.new("Quad")
+    quad.Visible = false
+    quad.Transparency = 0.7
+    quad.Thickness = 1.5
+    quad.Filled = false
+    return quad
 end
 
 local FOVCircle = Drawing.new("Circle")
@@ -801,27 +826,39 @@ local function GetSkeleton(character)
 end
 
 -------------------------------------------------
--- ESP MANAGEMENT (WITH INSTANT DEATH CLEANUP)
+-- ESP CREATION (ALL TYPES)
 -------------------------------------------------
 
 local function CreateESP(player)
     if player == LocalPlayer then return end
 
+    -- Skeleton Lines (14 max)
     local skeleton = {}
     for i = 1, 14 do
         skeleton[i] = NewLine()
     end
 
+    -- Tracer Line
     local tracer = NewLine()
+
+    -- Box ESP (4 lines for 2D box)
+    local box = {}
+    for i = 1, 4 do
+        box[i] = NewLine()
+    end
+
+    -- Line ESP (single line from bottom screen to player)
+    local lineESP = NewLine()
 
     ESP[player] = {
         Skeleton = skeleton,
         Tracer = tracer,
-        LastHealth = 100,
+        Box = box,
+        Line = lineESP,
         IsDead = false
     }
 
-    -- Track health for instant cleanup
+    -- Health tracking for instant cleanup
     local function trackHealth()
         local char = player.Character
         if not char then return end
@@ -829,14 +866,12 @@ local function CreateESP(player)
         local hum = char:FindFirstChildOfClass("Humanoid")
         if hum then
             hum.HealthChanged:Connect(function(health)
-                ESP[player].LastHealth = health
                 if health <= 0 then
                     ESP[player].IsDead = true
-                    -- INSTANT CLEANUP
                     ESP[player].Tracer.Visible = false
-                    for _, line in pairs(ESP[player].Skeleton) do
-                        line.Visible = false
-                    end
+                    ESP[player].Line.Visible = false
+                    for _, line in pairs(ESP[player].Skeleton) do line.Visible = false end
+                    for _, line in pairs(ESP[player].Box) do line.Visible = false end
                 else
                     ESP[player].IsDead = false
                 end
@@ -844,11 +879,10 @@ local function CreateESP(player)
 
             hum.Died:Connect(function()
                 ESP[player].IsDead = true
-                -- INSTANT CLEANUP ON DEATH
                 ESP[player].Tracer.Visible = false
-                for _, line in pairs(ESP[player].Skeleton) do
-                    line.Visible = false
-                end
+                ESP[player].Line.Visible = false
+                for _, line in pairs(ESP[player].Skeleton) do line.Visible = false end
+                for _, line in pairs(ESP[player].Box) do line.Visible = false end
             end)
         end
     end
@@ -864,14 +898,13 @@ local function RemoveESP(player)
     local data = ESP[player]
     if not data then return end
 
-    for _, line in pairs(data.Skeleton) do
-        line:Remove()
-    end
+    for _, line in pairs(data.Skeleton) do line:Remove() end
     data.Tracer:Remove()
+    for _, line in pairs(data.Box) do line:Remove() end
+    data.Line:Remove()
     ESP[player] = nil
 end
 
--- Initialize ESP for existing players
 for _, player in ipairs(Players:GetPlayers()) do
     CreateESP(player)
 end
@@ -880,7 +913,7 @@ Players.PlayerAdded:Connect(CreateESP)
 Players.PlayerRemoving:Connect(RemoveESP)
 
 -------------------------------------------------
--- AIM TARGET SYSTEM
+-- AIM TARGET + AUTO SHOOT
 -------------------------------------------------
 
 local function GetClosestPlayer()
@@ -894,7 +927,6 @@ local function GetClosestPlayer()
             local hum = char and char:FindFirstChildOfClass("Humanoid")
             local head = char and char:FindFirstChild("Head")
 
-            -- Skip dead players
             if hum and hum.Health > 0 and head and not ESP[player].IsDead then
                 local pos, visible = Camera:WorldToViewportPoint(head.Position)
 
@@ -912,8 +944,23 @@ local function GetClosestPlayer()
     return closest
 end
 
+-- Auto Shoot when scoped (right mouse held)
+local IsScoped = false
+
+UIS.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton2 then
+        IsScoped = true
+    end
+end)
+
+UIS.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton2 then
+        IsScoped = false
+    end
+end)
+
 -------------------------------------------------
--- RENDER LOOP
+-- RENDER LOOP - ALL ESP + AIM + AUTO SHOOT
 -------------------------------------------------
 
 RunService.RenderStepped:Connect(function()
@@ -923,49 +970,65 @@ RunService.RenderStepped:Connect(function()
     FOVCircle.Position = mousePos
     FOVCircle.Radius = Features.AimFOV
     FOVCircle.Color = Features.ESPColor
-    FOVCircle.Visible = Features.AimAssist
+    FOVCircle.Visible = Features.AimAssist or Features.AutoShoot
 
     local myChar = LocalPlayer.Character
     local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+    local myHum = myChar and myChar:FindFirstChildOfClass("Humanoid")
+
+    -- Auto Shoot Logic
+    local targetForShoot = nil
+    if Features.AutoShoot then
+        targetForShoot = GetClosestPlayer()
+        if targetForShoot and IsScoped then
+            mouse1press()
+            wait(0.05)
+            mouse1release()
+        end
+    end
 
     for player, data in pairs(ESP) do
         -- INSTANT DEATH CHECK
         if data.IsDead then
             data.Tracer.Visible = false
-            for _, line in pairs(data.Skeleton) do
-                line.Visible = false
-            end
+            data.Line.Visible = false
+            for _, line in pairs(data.Skeleton) do line.Visible = false end
+            for _, line in pairs(data.Box) do line.Visible = false end
             continue
         end
 
         local char = player.Character
         local hum = char and char:FindFirstChildOfClass("Humanoid")
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        local head = char and char:FindFirstChild("Head")
 
-        -- Additional death check
-        if not char or not hum or hum.Health <= 0 or not hrp then
+        if not char or not hum or hum.Health <= 0 or not hrp or not head then
             data.Tracer.Visible = false
-            for _, line in pairs(data.Skeleton) do
-                line.Visible = false
-            end
+            data.Line.Visible = false
+            for _, line in pairs(data.Skeleton) do line.Visible = false end
+            for _, line in pairs(data.Box) do line.Visible = false end
             continue
         end
 
         local rootPos, onScreen = Camera:WorldToViewportPoint(hrp.Position)
+        local headPos = Camera:WorldToViewportPoint(head.Position)
 
         if not onScreen then
             data.Tracer.Visible = false
-            for _, line in pairs(data.Skeleton) do
-                line.Visible = false
-            end
+            data.Line.Visible = false
+            for _, line in pairs(data.Skeleton) do line.Visible = false end
+            for _, line in pairs(data.Box) do line.Visible = false end
             continue
         end
 
         local distance = (Camera.CFrame.Position - hrp.Position).Magnitude
         local thickness = math.clamp(3.5 - (distance / 300), 1, 3.5)
         local color = Features.ESPColor
+        local screenHeight = Camera.ViewportSize.Y
 
+        -------------------------------------------------
         -- SKELETON ESP
+        -------------------------------------------------
         if Features.SkeletonESP and not data.IsDead then
             local connections = GetSkeleton(char)
 
@@ -974,7 +1037,7 @@ RunService.RenderStepped:Connect(function()
                 local p1 = char:FindFirstChild(bones[2])
                 local line = data.Skeleton[i]
 
-                if p0 and p1 then
+                if p0 and p1 and line then
                     local v0, vis0 = Camera:WorldToViewportPoint(p0.Position)
                     local v1, vis1 = Camera:WorldToViewportPoint(p1.Position)
 
@@ -987,17 +1050,19 @@ RunService.RenderStepped:Connect(function()
                     else
                         line.Visible = false
                     end
-                else
+                elseif line then
                     line.Visible = false
                 end
             end
         else
             for _, line in pairs(data.Skeleton) do
-                line.Visible = false
+                if line then line.Visible = false end
             end
         end
 
+        -------------------------------------------------
         -- TRACER ESP
+        -------------------------------------------------
         if Features.TracerESP and myRoot and not data.IsDead then
             local myPos, myVis = Camera:WorldToViewportPoint(myRoot.Position + Vector3.new(0, 2, 0))
 
@@ -1013,9 +1078,70 @@ RunService.RenderStepped:Connect(function()
         else
             data.Tracer.Visible = false
         end
+
+        -------------------------------------------------
+        -- BOX ESP (2D Bounding Box)
+        -------------------------------------------------
+        if Features.BoxESP and not data.IsDead then
+            local size = 2000 / distance
+            local x = rootPos.X
+            local y = rootPos.Y
+
+            local topLeft = Vector2.new(x - size/2, y - size * 1.2)
+            local topRight = Vector2.new(x + size/2, y - size * 1.2)
+            local bottomLeft = Vector2.new(x - size/2, y + size/2)
+            local bottomRight = Vector2.new(x + size/2, y + size/2)
+
+            -- Top line
+            data.Box[1].From = topLeft
+            data.Box[1].To = topRight
+            data.Box[1].Color = color
+            data.Box[1].Thickness = thickness
+            data.Box[1].Visible = true
+
+            -- Right line
+            data.Box[2].From = topRight
+            data.Box[2].To = bottomRight
+            data.Box[2].Color = color
+            data.Box[2].Thickness = thickness
+            data.Box[2].Visible = true
+
+            -- Bottom line
+            data.Box[3].From = bottomRight
+            data.Box[3].To = bottomLeft
+            data.Box[3].Color = color
+            data.Box[3].Thickness = thickness
+            data.Box[3].Visible = true
+
+            -- Left line
+            data.Box[4].From = bottomLeft
+            data.Box[4].To = topLeft
+            data.Box[4].Color = color
+            data.Box[4].Thickness = thickness
+            data.Box[4].Visible = true
+        else
+            for _, line in pairs(data.Box) do
+                if line then line.Visible = false end
+            end
+        end
+
+        -------------------------------------------------
+        -- LINE ESP (Bottom Screen to Player)
+        -------------------------------------------------
+        if Features.LineESP and not data.IsDead then
+            data.Line.From = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y)
+            data.Line.To = Vector2.new(rootPos.X, rootPos.Y)
+            data.Line.Color = color
+            data.Line.Thickness = thickness
+            data.Line.Visible = true
+        else
+            data.Line.Visible = false
+        end
     end
 
+    -------------------------------------------------
     -- AIM ASSIST
+    -------------------------------------------------
     if Features.AimAssist then
         local target = GetClosestPlayer()
 
