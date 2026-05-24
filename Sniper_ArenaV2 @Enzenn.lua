@@ -1,5 +1,5 @@
--- Modern UNO HUB v6.0
--- Fixed: FOV circle at screen center, sliders draggable
+-- Modern UNO HUB v7.0
+-- Mobile + PC | Platform detection | Virtual buttons | Fixed sliders | Snap-once aimbot
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -8,12 +8,20 @@ local TweenService = game:GetService("TweenService")
 local Camera = workspace.CurrentCamera
 local LocalPlayer = Players.LocalPlayer
 
--- Cleanup existing
+-- Cleanup
 if game.CoreGui:FindFirstChild("UnoModernHub") then
     game.CoreGui.UnoModernHub:Destroy()
 end
 
--- State
+-------------------------------------------------
+-- PLATFORM DETECTION (everything branches from this)
+-------------------------------------------------
+local isMobile = UIS.TouchEnabled and not UIS.KeyboardEnabled
+local isPC = not isMobile
+
+-------------------------------------------------
+-- STATE
+-------------------------------------------------
 local Features = {
     SkeletonESP = false,
     TracerESP = false,
@@ -21,6 +29,7 @@ local Features = {
     LineESP = false,
     AimAssist = false,
     AutoShoot = false,
+    AimActive = false,      -- separate trigger state
     AimStrength = 35,
     AimFOV = 140,
     AimSmoothness = 0.12,
@@ -28,7 +37,7 @@ local Features = {
 }
 
 local ESP = {}
-local IsScoped = false
+local targetSnapshot = nil  -- locked once per frame
 
 -------------------------------------------------
 -- UTILITY
@@ -38,7 +47,7 @@ local function Tween(obj, props, dur)
 end
 
 -------------------------------------------------
--- GUI CREATION
+-- GUI SETUP
 -------------------------------------------------
 local gui = Instance.new("ScreenGui")
 gui.Name = "UnoModernHub"
@@ -47,10 +56,11 @@ gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.Parent = game.CoreGui
 
 -- ==================== HOME ICON ====================
+local iconSize = isMobile and 50 or 36
 local icon = Instance.new("ImageButton")
 icon.Name = "HomeIcon"
-icon.Size = UDim2.new(0, 40, 0, 40)
-icon.Position = UDim2.new(0, 20, 0.5, -20)
+icon.Size = UDim2.new(0, iconSize, 0, iconSize)
+icon.Position = UDim2.new(0, 15, 0.5, -iconSize/2)
 icon.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
 icon.Image = "rbxassetid://7733960981"
 icon.ImageColor3 = Features.ESPColor
@@ -59,7 +69,7 @@ icon.Active = true
 icon.Parent = gui
 
 local iconCorner = Instance.new("UICorner")
-iconCorner.CornerRadius = UDim.new(0, 10)
+iconCorner.CornerRadius = UDim.new(0, 12)
 iconCorner.Parent = icon
 
 local iconStroke = Instance.new("UIStroke")
@@ -67,7 +77,7 @@ iconStroke.Color = Features.ESPColor
 iconStroke.Thickness = 2
 iconStroke.Parent = icon
 
--- Icon drag
+-- Icon drag (works for both touch and mouse)
 local iconDragging = false
 local iconDragStart = nil
 local iconStartPos = nil
@@ -81,7 +91,7 @@ icon.InputBegan:Connect(function(input, gameProcessed)
     end
 end)
 
-icon.InputChanged:Connect(function(input)
+UIS.InputChanged:Connect(function(input)
     if iconDragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
         local delta = input.Position - iconDragStart
         icon.Position = UDim2.new(
@@ -98,10 +108,12 @@ UIS.InputEnded:Connect(function(input)
 end)
 
 -- ==================== MAIN WINDOW ====================
+local mainWidth = isMobile and 360 or 400
+local mainHeight = isMobile and 280 or 320
 local main = Instance.new("Frame")
 main.Name = "MainWindow"
-main.Size = UDim2.new(0, 400, 0, 320)
-main.Position = UDim2.new(0.5, -200, 0.5, -160)
+main.Size = UDim2.new(0, mainWidth, 0, mainHeight)
+main.Position = UDim2.new(0.5, -mainWidth/2, 0.5, -mainHeight/2)
 main.BackgroundColor3 = Color3.fromRGB(15, 15, 18)
 main.BorderSizePixel = 0
 main.Active = true
@@ -156,17 +168,18 @@ local subText = Instance.new("TextLabel")
 subText.Size = UDim2.new(0, 120, 0, 14)
 subText.Position = UDim2.new(0, 38, 0, 24)
 subText.BackgroundTransparency = 1
-subText.Text = "v6.0 | Fixed"
+subText.Text = "v7.0 | Mobile"
 subText.TextColor3 = Color3.fromRGB(130, 130, 140)
 subText.Font = Enum.Font.Gotham
 subText.TextSize = 10
 subText.TextXAlignment = Enum.TextXAlignment.Left
 subText.Parent = topBar
 
--- Window buttons
+-- Window buttons (bigger on mobile)
+local btnSize = isMobile and 36 or 28
 local function MakeBtn(text, pos, bg, hover)
     local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(0, 28, 0, 28)
+    btn.Size = UDim2.new(0, btnSize, 0, btnSize)
     btn.Position = pos
     btn.Text = text
     btn.TextScaled = true
@@ -224,7 +237,7 @@ local tabContents = {}
 local function CreateTab(name)
     local btn = Instance.new("TextButton")
     btn.Name = name.."Tab"
-    btn.Size = UDim2.new(0, 110, 0, 28)
+    btn.Size = UDim2.new(0, isMobile and 90 or 110, 0, 28)
     btn.BackgroundColor3 = name == activeTabName and Color3.fromRGB(0, 170, 255) or Color3.fromRGB(32, 32, 40)
     btn.Text = name
     btn.Font = Enum.Font.GothamSemibold
@@ -276,11 +289,11 @@ local combatScroll = CreateTab("Combat")
 local visualScroll = CreateTab("Visual")
 
 -------------------------------------------------
--- TOGGLE COMPONENT
+-- TOGGLE COMPONENT (bigger touch targets on mobile)
 -------------------------------------------------
 local function CreateToggle(parent, text, default, callback)
     local frame = Instance.new("Frame")
-    frame.Size = UDim2.new(1, -8, 0, 48)
+    frame.Size = UDim2.new(1, -8, 0, isMobile and 56 or 48)
     frame.BackgroundColor3 = Color3.fromRGB(26, 26, 32)
     frame.BorderSizePixel = 0
     frame.Parent = parent
@@ -296,13 +309,13 @@ local function CreateToggle(parent, text, default, callback)
     label.Text = text
     label.TextColor3 = Color3.fromRGB(235, 235, 245)
     label.Font = Enum.Font.GothamMedium
-    label.TextSize = 14
+    label.TextSize = isMobile and 16 or 14
     label.TextXAlignment = Enum.TextXAlignment.Left
     label.Parent = frame
 
     local track = Instance.new("TextButton")
-    track.Size = UDim2.new(0, 52, 0, 28)
-    track.Position = UDim2.new(1, -66, 0.5, -14)
+    track.Size = UDim2.new(0, isMobile and 60 or 52, 0, isMobile and 32 or 28)
+    track.Position = UDim2.new(1, -70, 0.5, -16)
     track.Text = ""
     track.BackgroundColor3 = default and Color3.fromRGB(0, 170, 255) or Color3.fromRGB(50, 50, 60)
     track.AutoButtonColor = false
@@ -313,8 +326,8 @@ local function CreateToggle(parent, text, default, callback)
     tc.Parent = track
 
     local knob = Instance.new("Frame")
-    knob.Size = UDim2.new(0, 22, 0, 22)
-    knob.Position = default and UDim2.new(1, -26, 0.5, -11) or UDim2.new(0, 3, 0.5, -11)
+    knob.Size = UDim2.new(0, isMobile and 26 or 22, 0, isMobile and 26 or 22)
+    knob.Position = default and UDim2.new(1, -30, 0.5, -13) or UDim2.new(0, 3, 0.5, -13)
     knob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
     knob.Parent = track
 
@@ -328,10 +341,10 @@ local function CreateToggle(parent, text, default, callback)
         state = not state
         if state then
             Tween(track, {BackgroundColor3 = Color3.fromRGB(0, 170, 255)}, 0.2)
-            Tween(knob, {Position = UDim2.new(1, -26, 0.5, -11)}, 0.2)
+            Tween(knob, {Position = UDim2.new(1, -30, 0.5, -13)}, 0.2)
         else
             Tween(track, {BackgroundColor3 = Color3.fromRGB(50, 50, 60)}, 0.2)
-            Tween(knob, {Position = UDim2.new(0, 3, 0.5, -11)}, 0.2)
+            Tween(knob, {Position = UDim2.new(0, 3, 0.5, -13)}, 0.2)
         end
         callback(state)
     end)
@@ -340,11 +353,11 @@ local function CreateToggle(parent, text, default, callback)
 end
 
 -------------------------------------------------
--- SLIDER COMPONENT (FIXED - uses TextButton for track)
+-- SLIDER COMPONENT (FIXED - global drag, TextButton track)
 -------------------------------------------------
 local function CreateSlider(parent, labelText, min, max, default, callback, suffix)
     local frame = Instance.new("Frame")
-    frame.Size = UDim2.new(1, -8, 0, 64)
+    frame.Size = UDim2.new(1, -8, 0, isMobile and 72 or 64)
     frame.BackgroundColor3 = Color3.fromRGB(26, 26, 32)
     frame.BorderSizePixel = 0
     frame.Parent = parent
@@ -360,14 +373,14 @@ local function CreateSlider(parent, labelText, min, max, default, callback, suff
     label.Text = labelText..": "..default..(suffix or "")
     label.TextColor3 = Color3.fromRGB(235, 235, 245)
     label.Font = Enum.Font.GothamMedium
-    label.TextSize = 13
+    label.TextSize = isMobile and 16 or 13
     label.TextXAlignment = Enum.TextXAlignment.Left
     label.Parent = frame
 
-    -- Track is now a TextButton so it receives input!
+    -- Track is TextButton so it receives input
     local track = Instance.new("TextButton")
-    track.Size = UDim2.new(1, -24, 0, 10)
-    track.Position = UDim2.new(0, 12, 0, 38)
+    track.Size = UDim2.new(1, -24, 0, 12)
+    track.Position = UDim2.new(0, 12, 0, 40)
     track.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
     track.Text = ""
     track.AutoButtonColor = false
@@ -390,8 +403,8 @@ local function CreateSlider(parent, labelText, min, max, default, callback, suff
     fc2.Parent = fill
 
     local handle = Instance.new("Frame")
-    handle.Size = UDim2.new(0, 18, 0, 18)
-    handle.Position = UDim2.new(pct, -9, 0.5, -9)
+    handle.Size = UDim2.new(0, isMobile and 24 or 18, 0, isMobile and 24 or 18)
+    handle.Position = UDim2.new(pct, -handle.Size.X.Offset/2, 0.5, -handle.Size.Y.Offset/2)
     handle.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
     handle.BorderSizePixel = 0
     handle.Parent = track
@@ -400,7 +413,6 @@ local function CreateSlider(parent, labelText, min, max, default, callback, suff
     hc.CornerRadius = UDim.new(1, 0)
     hc.Parent = handle
 
-    -- Add a subtle shadow to handle
     local handleStroke = Instance.new("UIStroke")
     handleStroke.Color = Color3.fromRGB(200, 200, 200)
     handleStroke.Thickness = 1
@@ -416,13 +428,13 @@ local function CreateSlider(parent, labelText, min, max, default, callback, suff
         local value = math.floor(min + (newPct * (max - min)))
 
         fill.Size = UDim2.new(newPct, 0, 1, 0)
-        handle.Position = UDim2.new(newPct, -9, 0.5, -9)
+        handle.Position = UDim2.new(newPct, -handle.Size.X.Offset/2, 0.5, -handle.Size.Y.Offset/2)
         label.Text = labelText..": "..value..(suffix or "")
 
         callback(value)
     end
 
-    -- InputBegan on track (now works because it's a TextButton)
+    -- InputBegan on track
     track.InputBegan:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
             dragging = true
@@ -430,21 +442,14 @@ local function CreateSlider(parent, labelText, min, max, default, callback, suff
         end
     end)
 
-    -- InputChanged on track for dragging
-    track.InputChanged:Connect(function(input)
+    -- GLOBAL InputChanged for dragging (catches movement outside track)
+    UIS.InputChanged:Connect(function(input)
         if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
             updateFromInput(input)
         end
     end)
 
-    -- InputEnded on track
-    track.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            dragging = false
-        end
-    end)
-
-    -- Global release catch (in case mouse leaves track while dragging)
+    -- GLOBAL InputEnded to release drag anywhere
     UIS.InputEnded:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
             dragging = false
@@ -459,7 +464,7 @@ end
 -------------------------------------------------
 local function CreateDropdown(parent, labelText, options, default, callback)
     local frame = Instance.new("Frame")
-    frame.Size = UDim2.new(1, -8, 0, 48)
+    frame.Size = UDim2.new(1, -8, 0, isMobile and 56 or 48)
     frame.BackgroundColor3 = Color3.fromRGB(26, 26, 32)
     frame.BorderSizePixel = 0
     frame.ClipsDescendants = true
@@ -470,13 +475,13 @@ local function CreateDropdown(parent, labelText, options, default, callback)
     fc.Parent = frame
 
     local label = Instance.new("TextLabel")
-    label.Size = UDim2.new(0.4, 0, 0, 48)
+    label.Size = UDim2.new(0.4, 0, 0, frame.Size.Y.Offset)
     label.Position = UDim2.new(0, 14, 0, 0)
     label.BackgroundTransparency = 1
     label.Text = labelText
     label.TextColor3 = Color3.fromRGB(235, 235, 245)
     label.Font = Enum.Font.GothamMedium
-    label.TextSize = 14
+    label.TextSize = isMobile and 16 or 14
     label.TextXAlignment = Enum.TextXAlignment.Left
     label.Parent = frame
 
@@ -507,7 +512,7 @@ local function CreateDropdown(parent, labelText, options, default, callback)
 
     local list = Instance.new("Frame")
     list.Size = UDim2.new(1, 0, 0, #options * 30)
-    list.Position = UDim2.new(0, 0, 0, 48)
+    list.Position = UDim2.new(0, 0, 0, frame.Size.Y.Offset)
     list.BackgroundColor3 = Color3.fromRGB(28, 28, 36)
     list.BorderSizePixel = 0
     list.Visible = false
@@ -543,7 +548,7 @@ local function CreateDropdown(parent, labelText, options, default, callback)
             callback(opt)
             expanded = false
             list.Visible = false
-            Tween(frame, {Size = UDim2.new(1, -8, 0, 48)}, 0.2)
+            Tween(frame, {Size = UDim2.new(1, -8, 0, isMobile and 56 or 48)}, 0.2)
             arrow.Text = "▼"
         end)
     end
@@ -552,10 +557,10 @@ local function CreateDropdown(parent, labelText, options, default, callback)
         expanded = not expanded
         if expanded then
             list.Visible = true
-            Tween(frame, {Size = UDim2.new(1, -8, 0, 48 + list.Size.Y.Offset)}, 0.2)
+            Tween(frame, {Size = UDim2.new(1, -8, 0, (isMobile and 56 or 48) + list.Size.Y.Offset)}, 0.2)
             arrow.Text = "▲"
         else
-            Tween(frame, {Size = UDim2.new(1, -8, 0, 48)}, 0.2)
+            Tween(frame, {Size = UDim2.new(1, -8, 0, isMobile and 56 or 48)}, 0.2)
             arrow.Text = "▼"
             delay(0.2, function()
                 if not expanded then list.Visible = false end
@@ -627,6 +632,85 @@ CreateDropdown(visualScroll, "ESP Color", {"Cyan", "Red", "Green", "Purple", "Ye
 end)
 
 -------------------------------------------------
+-- VIRTUAL BUTTONS (MOBILE ONLY)
+-------------------------------------------------
+if isMobile then
+    -- Aim button (bottom right)
+    local aimBtn = Instance.new("TextButton")
+    aimBtn.Name = "VirtualAim"
+    aimBtn.Size = UDim2.new(0, 80, 0, 80)
+    aimBtn.Position = UDim2.new(1, -100, 1, -180)
+    aimBtn.BackgroundColor3 = Color3.fromRGB(0, 170, 255)
+    aimBtn.Text = "AIM"
+    aimBtn.Font = Enum.Font.GothamBold
+    aimBtn.TextSize = 18
+    aimBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    aimBtn.AutoButtonColor = false
+    aimBtn.Active = true
+    aimBtn.Parent = gui
+
+    local abc = Instance.new("UICorner")
+    abc.CornerRadius = UDim.new(1, 0)
+    abc.Parent = aimBtn
+
+    local abs = Instance.new("UIStroke")
+    abs.Color = Color3.fromRGB(255, 255, 255)
+    abs.Thickness = 2
+    abs.Parent = aimBtn
+
+    aimBtn.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch then
+            Features.AimActive = true
+            Tween(aimBtn, {BackgroundColor3 = Color3.fromRGB(0, 220, 255)}, 0.1)
+        end
+    end)
+
+    aimBtn.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch then
+            Features.AimActive = false
+            Tween(aimBtn, {BackgroundColor3 = Color3.fromRGB(0, 170, 255)}, 0.1)
+        end
+    end)
+
+    -- Shoot button (bottom right, below aim)
+    local shootBtn = Instance.new("TextButton")
+    shootBtn.Name = "VirtualShoot"
+    shootBtn.Size = UDim2.new(0, 80, 0, 80)
+    shootBtn.Position = UDim2.new(1, -100, 1, -90)
+    shootBtn.BackgroundColor3 = Color3.fromRGB(255, 60, 60)
+    shootBtn.Text = "FIRE"
+    shootBtn.Font = Enum.Font.GothamBold
+    shootBtn.TextSize = 18
+    shootBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    shootBtn.AutoButtonColor = false
+    shootBtn.Active = true
+    shootBtn.Parent = gui
+
+    local sbc = Instance.new("UICorner")
+    sbc.CornerRadius = UDim.new(1, 0)
+    sbc.Parent = shootBtn
+
+    local sbs = Instance.new("UIStroke")
+    sbs.Color = Color3.fromRGB(255, 255, 255)
+    sbs.Thickness = 2
+    sbs.Parent = shootBtn
+
+    shootBtn.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch then
+            Features.AimActive = true
+            Tween(shootBtn, {BackgroundColor3 = Color3.fromRGB(255, 100, 100)}, 0.1)
+        end
+    end)
+
+    shootBtn.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch then
+            Features.AimActive = false
+            Tween(shootBtn, {BackgroundColor3 = Color3.fromRGB(255, 60, 60)}, 0.1)
+        end
+    end)
+end
+
+-------------------------------------------------
 -- WINDOW DRAG
 -------------------------------------------------
 local winDragging = false
@@ -634,7 +718,7 @@ local winDragStart = nil
 local winStartPos = nil
 
 topBar.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
         winDragging = true
         winDragStart = input.Position
         winStartPos = main.Position
@@ -642,7 +726,7 @@ topBar.InputBegan:Connect(function(input)
 end)
 
 UIS.InputChanged:Connect(function(input)
-    if winDragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+    if winDragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
         local delta = input.Position - winDragStart
         main.Position = UDim2.new(
             winStartPos.X.Scale, winStartPos.X.Offset + delta.X,
@@ -652,7 +736,7 @@ UIS.InputChanged:Connect(function(input)
 end)
 
 UIS.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
         winDragging = false
     end
 end)
@@ -668,11 +752,11 @@ local minimized = false
 minBtn.MouseButton1Click:Connect(function()
     minimized = not minimized
     if minimized then
-        Tween(main, {Size = UDim2.new(0, 400, 0, 42)}, 0.2)
+        Tween(main, {Size = UDim2.new(0, mainWidth, 0, 42)}, 0.2)
         tabBar.Visible = false
         contentArea.Visible = false
     else
-        Tween(main, {Size = UDim2.new(0, 400, 0, 320)}, 0.2)
+        Tween(main, {Size = UDim2.new(0, mainWidth, 0, mainHeight)}, 0.2)
         tabBar.Visible = true
         contentArea.Visible = true
     end
@@ -711,14 +795,14 @@ local function NewLine()
     local line = Drawing.new("Line")
     line.Visible = false
     line.Transparency = 1
-    line.Thickness = 1.5
+    line.Thickness = isMobile and 2.5 or 1.5  -- thicker on mobile
     return line
 end
 
 local FOVCircle = Drawing.new("Circle")
 FOVCircle.Visible = false
 FOVCircle.Color = Features.ESPColor
-FOVCircle.Thickness = 1.5
+FOVCircle.Thickness = isMobile and 2 or 1.5
 FOVCircle.NumSides = 64
 FOVCircle.Filled = false
 FOVCircle.Radius = Features.AimFOV
@@ -807,7 +891,7 @@ local function CreateESP(player)
     player.CharacterAdded:Connect(function()
         local data = ESP[player]
         if data then data.IsDead = false end
-        delay(0.5, SetupHealthTracking)
+        task.delay(0.5, SetupHealthTracking)
     end)
 end
 
@@ -831,7 +915,7 @@ Players.PlayerAdded:Connect(CreateESP)
 Players.PlayerRemoving:Connect(RemoveESP)
 
 -------------------------------------------------
--- AIM & SHOOT
+-- AIM & SHOOT - PLATFORM BRANCHING
 -------------------------------------------------
 local function GetClosestPlayer()
     local closest = nil
@@ -849,7 +933,6 @@ local function GetClosestPlayer()
                 if data and not data.IsDead then
                     local pos, visible = Camera:WorldToViewportPoint(head.Position)
                     if visible then
-                        -- Distance from SCREEN CENTER, not mouse
                         local dist = (Vector2.new(pos.X, pos.Y) - screenCenter).Magnitude
                         if dist < shortest then
                             shortest = dist
@@ -864,23 +947,32 @@ local function GetClosestPlayer()
     return closest
 end
 
-UIS.InputBegan:Connect(function(input, gameProcessed)
-    if not gameProcessed and input.UserInputType == Enum.UserInputType.MouseButton2 then
-        IsScoped = true
-    end
-end)
+-- PC: Right click to scope
+if isPC then
+    UIS.InputBegan:Connect(function(input, gameProcessed)
+        if not gameProcessed and input.UserInputType == Enum.UserInputType.MouseButton2 then
+            Features.AimActive = true
+        end
+    end)
 
-UIS.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton2 then
-        IsScoped = false
-    end
-end)
+    UIS.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton2 then
+            Features.AimActive = false
+        end
+    end)
+end
 
 -------------------------------------------------
--- RENDER LOOP
+-- RENDER LOOP - SNAP-ONCE AIMBOT
 -------------------------------------------------
 RunService.RenderStepped:Connect(function()
-    -- FOV CIRCLE AT SCREEN CENTER (NOT following mouse)
+    -- Snap target ONCE per frame at the very start
+    targetSnapshot = nil
+    if Features.AimAssist or (Features.AutoShoot and Features.AimActive) then
+        targetSnapshot = GetClosestPlayer()
+    end
+
+    -- FOV Circle at screen center
     local screenCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
     FOVCircle.Position = screenCenter
     FOVCircle.Radius = Features.AimFOV
@@ -890,16 +982,13 @@ RunService.RenderStepped:Connect(function()
     local myChar = LocalPlayer.Character
     local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
 
-    -- Auto Shoot
-    if Features.AutoShoot and IsScoped then
-        local target = GetClosestPlayer()
-        if target then
-            pcall(function()
-                mouse1press()
-                task.wait(0.05)
-                mouse1release()
-            end)
-        end
+    -- Auto Shoot (PC: right click held | Mobile: virtual button held)
+    if Features.AutoShoot and Features.AimActive and targetSnapshot then
+        pcall(function()
+            mouse1press()
+            task.wait(0.05)
+            mouse1release()
+        end)
     end
 
     -- ESP Render
@@ -1030,16 +1119,13 @@ RunService.RenderStepped:Connect(function()
         end
     end
 
-    -- AIM ASSIST (uses screen center for targeting)
-    if Features.AimAssist then
-        local target = GetClosestPlayer()
-        if target then
-            local smooth = math.clamp(Features.AimStrength / 100, 0.01, 1)
-            Camera.CFrame = Camera.CFrame:Lerp(
-                CFrame.new(Camera.CFrame.Position, target.Position),
-                smooth * Features.AimSmoothness
-            )
-        end
+    -- AIM ASSIST (uses snapshotted target, never recalculates mid-frame)
+    if Features.AimAssist and targetSnapshot then
+        local smooth = math.clamp(Features.AimStrength / 100, 0.01, 1)
+        Camera.CFrame = Camera.CFrame:Lerp(
+            CFrame.new(Camera.CFrame.Position, targetSnapshot.Position),
+            smooth * Features.AimSmoothness
+        )
     end
 end)
 
