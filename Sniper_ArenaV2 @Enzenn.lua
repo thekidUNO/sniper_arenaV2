@@ -1,5 +1,5 @@
--- Modern UNO HUB v5.0
--- Clean rewrite - all features working
+-- Modern UNO HUB v6.0
+-- Fixed: FOV circle at screen center, sliders draggable
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -67,7 +67,7 @@ iconStroke.Color = Features.ESPColor
 iconStroke.Thickness = 2
 iconStroke.Parent = icon
 
--- Icon drag variables
+-- Icon drag
 local iconDragging = false
 local iconDragStart = nil
 local iconStartPos = nil
@@ -124,13 +124,11 @@ topBar.BackgroundColor3 = Color3.fromRGB(22, 22, 26)
 topBar.BorderSizePixel = 0
 mainCorner:Clone().Parent = topBar
 
--- Fix bottom of topbar
 local topBarFix = Instance.new("Frame")
 topBarFix.Size = UDim2.new(1, 0, 0, 20)
 topBarFix.Position = UDim2.new(0, 0, 1, -20)
 topBarFix.BackgroundColor3 = topBar.BackgroundColor3
 mainCorner:Clone().Parent = topBarFix
-
 topBarFix.Parent = topBar
 topBar.Parent = main
 
@@ -141,7 +139,6 @@ titleIcon.Position = UDim2.new(0, 12, 0, 11)
 titleIcon.BackgroundTransparency = 1
 titleIcon.Image = "rbxassetid://7733960981"
 titleIcon.ImageColor3 = Features.ESPColor
-mainCorner:Clone().Parent = titleIcon
 titleIcon.Parent = topBar
 
 local titleText = Instance.new("TextLabel")
@@ -159,7 +156,7 @@ local subText = Instance.new("TextLabel")
 subText.Size = UDim2.new(0, 120, 0, 14)
 subText.Position = UDim2.new(0, 38, 0, 24)
 subText.BackgroundTransparency = 1
-subText.Text = "v5.0 | Premium"
+subText.Text = "v6.0 | Fixed"
 subText.TextColor3 = Color3.fromRGB(130, 130, 140)
 subText.Font = Enum.Font.Gotham
 subText.TextSize = 10
@@ -240,7 +237,6 @@ local function CreateTab(name)
     bc.CornerRadius = UDim.new(0, 8)
     bc.Parent = btn
 
-    -- Content scrolling frame
     local scroll = Instance.new("ScrollingFrame")
     scroll.Name = name.."Scroll"
     scroll.Size = UDim2.new(1, 0, 1, 0)
@@ -266,12 +262,8 @@ local function CreateTab(name)
 
     btn.MouseButton1Click:Connect(function()
         if activeTabName == name then return end
-
-        -- Deactivate old
         Tween(tabs[activeTabName], {BackgroundColor3 = Color3.fromRGB(32, 32, 40)}, 0.2)
         tabContents[activeTabName].Visible = false
-
-        -- Activate new
         activeTabName = name
         Tween(btn, {BackgroundColor3 = Color3.fromRGB(0, 170, 255)}, 0.2)
         tabContents[name].Visible = true
@@ -283,7 +275,9 @@ end
 local combatScroll = CreateTab("Combat")
 local visualScroll = CreateTab("Visual")
 
--- ==================== TOGGLE COMPONENT ====================
+-------------------------------------------------
+-- TOGGLE COMPONENT
+-------------------------------------------------
 local function CreateToggle(parent, text, default, callback)
     local frame = Instance.new("Frame")
     frame.Size = UDim2.new(1, -8, 0, 48)
@@ -306,7 +300,6 @@ local function CreateToggle(parent, text, default, callback)
     label.TextXAlignment = Enum.TextXAlignment.Left
     label.Parent = frame
 
-    -- Toggle track
     local track = Instance.new("TextButton")
     track.Size = UDim2.new(0, 52, 0, 28)
     track.Position = UDim2.new(1, -66, 0.5, -14)
@@ -319,7 +312,6 @@ local function CreateToggle(parent, text, default, callback)
     tc.CornerRadius = UDim.new(1, 0)
     tc.Parent = track
 
-    -- Knob
     local knob = Instance.new("Frame")
     knob.Size = UDim2.new(0, 22, 0, 22)
     knob.Position = default and UDim2.new(1, -26, 0.5, -11) or UDim2.new(0, 3, 0.5, -11)
@@ -347,7 +339,9 @@ local function CreateToggle(parent, text, default, callback)
     return frame
 end
 
--- ==================== SLIDER COMPONENT ====================
+-------------------------------------------------
+-- SLIDER COMPONENT (FIXED - uses TextButton for track)
+-------------------------------------------------
 local function CreateSlider(parent, labelText, min, max, default, callback, suffix)
     local frame = Instance.new("Frame")
     frame.Size = UDim2.new(1, -8, 0, 64)
@@ -370,20 +364,21 @@ local function CreateSlider(parent, labelText, min, max, default, callback, suff
     label.TextXAlignment = Enum.TextXAlignment.Left
     label.Parent = frame
 
-    -- Track
-    local track = Instance.new("Frame")
-    track.Size = UDim2.new(1, -24, 0, 8)
+    -- Track is now a TextButton so it receives input!
+    local track = Instance.new("TextButton")
+    track.Size = UDim2.new(1, -24, 0, 10)
     track.Position = UDim2.new(0, 12, 0, 38)
     track.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
-    track.BorderSizePixel = 0
+    track.Text = ""
+    track.AutoButtonColor = false
     track.Parent = frame
 
     local tc = Instance.new("UICorner")
     tc.CornerRadius = UDim.new(1, 0)
     tc.Parent = track
 
-    -- Fill
     local pct = (default - min) / (max - min)
+
     local fill = Instance.new("Frame")
     fill.Size = UDim2.new(pct, 0, 1, 0)
     fill.BackgroundColor3 = Color3.fromRGB(0, 170, 255)
@@ -394,10 +389,9 @@ local function CreateSlider(parent, labelText, min, max, default, callback, suff
     fc2.CornerRadius = UDim.new(1, 0)
     fc2.Parent = fill
 
-    -- Handle
     local handle = Instance.new("Frame")
-    handle.Size = UDim2.new(0, 16, 0, 16)
-    handle.Position = UDim2.new(pct, -8, 0.5, -8)
+    handle.Size = UDim2.new(0, 18, 0, 18)
+    handle.Position = UDim2.new(pct, -9, 0.5, -9)
     handle.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
     handle.BorderSizePixel = 0
     handle.Parent = track
@@ -406,9 +400,15 @@ local function CreateSlider(parent, labelText, min, max, default, callback, suff
     hc.CornerRadius = UDim.new(1, 0)
     hc.Parent = handle
 
+    -- Add a subtle shadow to handle
+    local handleStroke = Instance.new("UIStroke")
+    handleStroke.Color = Color3.fromRGB(200, 200, 200)
+    handleStroke.Thickness = 1
+    handleStroke.Parent = handle
+
     local dragging = false
 
-    local function update(input)
+    local function updateFromInput(input)
         local mouseX = input.Position.X
         local barX = track.AbsolutePosition.X
         local barW = track.AbsoluteSize.X
@@ -416,27 +416,37 @@ local function CreateSlider(parent, labelText, min, max, default, callback, suff
         local value = math.floor(min + (newPct * (max - min)))
 
         fill.Size = UDim2.new(newPct, 0, 1, 0)
-        handle.Position = UDim2.new(newPct, -8, 0.5, -8)
+        handle.Position = UDim2.new(newPct, -9, 0.5, -9)
         label.Text = labelText..": "..value..(suffix or "")
 
         callback(value)
     end
 
+    -- InputBegan on track (now works because it's a TextButton)
     track.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
             dragging = true
-            update(input)
+            updateFromInput(input)
         end
     end)
 
+    -- InputChanged on track for dragging
     track.InputChanged:Connect(function(input)
-        if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
-            update(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            updateFromInput(input)
         end
     end)
 
+    -- InputEnded on track
+    track.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+        end
+    end)
+
+    -- Global release catch (in case mouse leaves track while dragging)
     UIS.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
             dragging = false
         end
     end)
@@ -444,7 +454,9 @@ local function CreateSlider(parent, labelText, min, max, default, callback, suff
     return frame
 end
 
--- ==================== DROPDOWN COMPONENT ====================
+-------------------------------------------------
+-- DROPDOWN COMPONENT
+-------------------------------------------------
 local function CreateDropdown(parent, labelText, options, default, callback)
     local frame = Instance.new("Frame")
     frame.Size = UDim2.new(1, -8, 0, 48)
@@ -493,7 +505,6 @@ local function CreateDropdown(parent, labelText, options, default, callback)
     arrow.TextColor3 = Color3.fromRGB(150, 150, 160)
     arrow.Parent = display
 
-    -- Dropdown list
     local list = Instance.new("Frame")
     list.Size = UDim2.new(1, 0, 0, #options * 30)
     list.Position = UDim2.new(0, 0, 0, 48)
@@ -630,12 +641,6 @@ topBar.InputBegan:Connect(function(input)
     end
 end)
 
-topBar.InputChanged:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseMovement then
-        -- drag tracking
-    end
-end)
-
 UIS.InputChanged:Connect(function(input)
     if winDragging and input.UserInputType == Enum.UserInputType.MouseMovement then
         local delta = input.Position - winDragStart
@@ -677,35 +682,23 @@ hideBtn.MouseButton1Click:Connect(function()
     main.Visible = false
 end)
 
--- PROPER EXIT - FULL CLEANUP
 exitBtn.MouseButton1Click:Connect(function()
-    -- Hide everything first
     main.Visible = false
     icon.Visible = false
 
-    -- Remove all drawing objects
     for _, data in pairs(ESP) do
-        if data.Tracer then
-            pcall(function() data.Tracer:Remove() end)
-        end
+        if data.Tracer then pcall(function() data.Tracer:Remove() end) end
         if data.Skeleton then
-            for _, line in pairs(data.Skeleton) do
-                pcall(function() line:Remove() end)
-            end
+            for _, l in pairs(data.Skeleton) do pcall(function() l:Remove() end) end
         end
         if data.Box then
-            for _, line in pairs(data.Box) do
-                pcall(function() line:Remove() end)
-            end
+            for _, l in pairs(data.Box) do pcall(function() l:Remove() end) end
         end
-        if data.Line then
-            pcall(function() data.Line:Remove() end)
-        end
+        if data.Line then pcall(function() data.Line:Remove() end) end
     end
 
     pcall(function() FOVCircle:Remove() end)
 
-    -- Destroy GUI after brief delay to ensure cleanup
     delay(0.1, function()
         pcall(function() gui:Destroy() end)
     end)
@@ -788,18 +781,12 @@ local function CreateESP(player)
                     data.IsDead = true
                     data.Tracer.Visible = false
                     data.Line.Visible = false
-                    for _, l in pairs(data.Skeleton) do
-                        l.Visible = false
-                    end
-                    for _, l in pairs(data.Box) do
-                        l.Visible = false
-                    end
+                    for _, l in pairs(data.Skeleton) do l.Visible = false end
+                    for _, l in pairs(data.Box) do l.Visible = false end
                 end
             else
                 local data = ESP[player]
-                if data then
-                    data.IsDead = false
-                end
+                if data then data.IsDead = false end
             end
         end)
 
@@ -809,12 +796,8 @@ local function CreateESP(player)
                 data.IsDead = true
                 data.Tracer.Visible = false
                 data.Line.Visible = false
-                for _, l in pairs(data.Skeleton) do
-                    l.Visible = false
-                end
-                for _, l in pairs(data.Box) do
-                    l.Visible = false
-                end
+                for _, l in pairs(data.Skeleton) do l.Visible = false end
+                for _, l in pairs(data.Box) do l.Visible = false end
             end
         end)
     end
@@ -823,9 +806,7 @@ local function CreateESP(player)
 
     player.CharacterAdded:Connect(function()
         local data = ESP[player]
-        if data then
-            data.IsDead = false
-        end
+        if data then data.IsDead = false end
         delay(0.5, SetupHealthTracking)
     end)
 end
@@ -834,19 +815,14 @@ local function RemoveESP(player)
     local data = ESP[player]
     if not data then return end
 
-    for _, l in pairs(data.Skeleton) do
-        pcall(function() l:Remove() end)
-    end
+    for _, l in pairs(data.Skeleton) do pcall(function() l:Remove() end) end
     pcall(function() data.Tracer:Remove() end)
-    for _, l in pairs(data.Box) do
-        pcall(function() l:Remove() end)
-    end
+    for _, l in pairs(data.Box) do pcall(function() l:Remove() end) end
     pcall(function() data.Line:Remove() end)
 
     ESP[player] = nil
 end
 
--- Initialize for existing players
 for _, p in ipairs(Players:GetPlayers()) do
     CreateESP(p)
 end
@@ -860,7 +836,7 @@ Players.PlayerRemoving:Connect(RemoveESP)
 local function GetClosestPlayer()
     local closest = nil
     local shortest = Features.AimFOV
-    local mousePos = UIS:GetMouseLocation()
+    local screenCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
 
     for _, p in ipairs(Players:GetPlayers()) do
         if p ~= LocalPlayer then
@@ -873,7 +849,8 @@ local function GetClosestPlayer()
                 if data and not data.IsDead then
                     local pos, visible = Camera:WorldToViewportPoint(head.Position)
                     if visible then
-                        local dist = (Vector2.new(pos.X, pos.Y) - mousePos).Magnitude
+                        -- Distance from SCREEN CENTER, not mouse
+                        local dist = (Vector2.new(pos.X, pos.Y) - screenCenter).Magnitude
                         if dist < shortest then
                             shortest = dist
                             closest = head
@@ -887,7 +864,6 @@ local function GetClosestPlayer()
     return closest
 end
 
--- Scope detection
 UIS.InputBegan:Connect(function(input, gameProcessed)
     if not gameProcessed and input.UserInputType == Enum.UserInputType.MouseButton2 then
         IsScoped = true
@@ -904,10 +880,9 @@ end)
 -- RENDER LOOP
 -------------------------------------------------
 RunService.RenderStepped:Connect(function()
-    local mousePos = UIS:GetMouseLocation()
-
-    -- Update FOV circle
-    FOVCircle.Position = mousePos
+    -- FOV CIRCLE AT SCREEN CENTER (NOT following mouse)
+    local screenCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+    FOVCircle.Position = screenCenter
     FOVCircle.Radius = Features.AimFOV
     FOVCircle.Color = Features.ESPColor
     FOVCircle.Visible = Features.AimAssist or Features.AutoShoot
@@ -1043,7 +1018,7 @@ RunService.RenderStepped:Connect(function()
             for _, l in pairs(data.Box) do l.Visible = false end
         end
 
-        -- LINE ESP (bottom of screen)
+        -- LINE ESP
         if Features.LineESP then
             data.Line.From = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y)
             data.Line.To = Vector2.new(rootPos.X, rootPos.Y)
@@ -1055,7 +1030,7 @@ RunService.RenderStepped:Connect(function()
         end
     end
 
-    -- AIM ASSIST
+    -- AIM ASSIST (uses screen center for targeting)
     if Features.AimAssist then
         local target = GetClosestPlayer()
         if target then
