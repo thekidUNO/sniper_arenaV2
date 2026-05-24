@@ -1,3 +1,6 @@
+# Modern UNO HUB
+
+```lua
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UIS = game:GetService("UserInputService")
@@ -6,136 +9,136 @@ local Camera = workspace.CurrentCamera
 
 local LocalPlayer = Players.LocalPlayer
 
-if game.CoreGui:FindFirstChild("UnoHub") then
-    game.CoreGui.UnoHub:Destroy()
+if game.CoreGui:FindFirstChild("UnoModernHub") then
+    game.CoreGui.UnoModernHub:Destroy()
 end
 
 local ESP = {}
 
 local SkeletonESP = false
 local TracerESP = false
+local AimAssist = false
+
+local AimStrength = 35
+local AimFOV = 140
 
 -------------------------------------------------
 -- GUI
 -------------------------------------------------
 
 local gui = Instance.new("ScreenGui")
-gui.Name = "UnoHub"
+gui.Name = "UnoModernHub"
 gui.ResetOnSpawn = false
 gui.Parent = game.CoreGui
 
-local Open = true
-local Minimized = false
+local icon = Instance.new("ImageButton")
+icon.Size = UDim2.new(0,58,0,58)
+icon.Position = UDim2.new(0,20,0.5,-29)
+icon.BackgroundColor3 = Color3.fromRGB(15,15,15)
+icon.Image = "rbxassetid://7733960981"
+icon.AutoButtonColor = false
+icon.Parent = gui
 
-local appButton = Instance.new("ImageButton")
-appButton.Size = UDim2.new(0,60,0,60)
-appButton.Position = UDim2.new(0,20,0.5,-30)
-appButton.BackgroundColor3 = Color3.fromRGB(15,15,15)
-appButton.Image = "rbxassetid://7733960981"
-appButton.Parent = gui
-appButton.AutoButtonColor = false
+Instance.new("UICorner", icon).CornerRadius = UDim.new(1,0)
 
-Instance.new("UICorner", appButton).CornerRadius = UDim.new(1,0)
+local iconStroke = Instance.new("UIStroke")
+iconStroke.Color = Color3.fromRGB(0,170,255)
+iconStroke.Thickness = 2
+iconStroke.Parent = icon
 
-local appStroke = Instance.new("UIStroke")
-appStroke.Color = Color3.fromRGB(0,170,255)
-appStroke.Thickness = 2
-appStroke.Parent = appButton
+local main = Instance.new("Frame")
+main.Size = UDim2.new(0,370,0,300)
+main.Position = UDim2.new(0.5,-185,0.5,-150)
+main.BackgroundColor3 = Color3.fromRGB(12,12,12)
+main.BorderSizePixel = 0
+main.Parent = gui
 
-local frame = Instance.new("Frame")
-frame.Size = UDim2.new(0,320,0,240)
-frame.Position = UDim2.new(0.5,-160,0.5,-120)
-frame.BackgroundColor3 = Color3.fromRGB(14,14,14)
-frame.BorderSizePixel = 0
-frame.Parent = gui
+Instance.new("UICorner", main).CornerRadius = UDim.new(0,18)
 
-Instance.new("UICorner", frame).CornerRadius = UDim.new(0,14)
+local stroke = Instance.new("UIStroke")
+stroke.Color = Color3.fromRGB(0,170,255)
+stroke.Thickness = 2
+stroke.Parent = main
 
-local frameStroke = Instance.new("UIStroke")
-frameStroke.Color = Color3.fromRGB(0,170,255)
-frameStroke.Thickness = 2
-frameStroke.Parent = frame
-
-local topbar = Instance.new("Frame")
-topbar.Size = UDim2.new(1,0,0,36)
-topbar.BackgroundTransparency = 1
-topbar.Parent = frame
+local top = Instance.new("Frame")
+top.Size = UDim2.new(1,0,0,42)
+top.BackgroundTransparency = 1
+top.Parent = main
 
 local title = Instance.new("TextLabel")
-title.Size = UDim2.new(0.5,0,1,0)
-title.Position = UDim2.new(0,12,0,0)
+title.Size = UDim2.new(0.6,0,1,0)
+title.Position = UDim2.new(0,14,0,0)
 title.BackgroundTransparency = 1
 title.Text = "UNO HUB"
 title.TextColor3 = Color3.fromRGB(255,255,255)
 title.Font = Enum.Font.GothamBold
-title.TextXAlignment = Enum.TextXAlignment.Left
 title.TextScaled = true
-title.Parent = topbar
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.Parent = top
 
-local function CreateTopButton(text,x,color)
-
+local function TopButton(txt,x,color)
     local b = Instance.new("TextButton")
     b.Size = UDim2.new(0,28,0,28)
-    b.Position = UDim2.new(1,x,0,4)
-    b.Text = text
+    b.Position = UDim2.new(1,x,0,7)
+    b.Text = txt
     b.TextScaled = true
     b.Font = Enum.Font.GothamBold
     b.TextColor3 = Color3.fromRGB(255,255,255)
     b.BackgroundColor3 = color
-    b.Parent = topbar
+    b.Parent = top
 
     Instance.new("UICorner", b).CornerRadius = UDim.new(1,0)
 
     return b
 end
 
-local minimizeBtn = CreateTopButton("-",-96,Color3.fromRGB(35,35,35))
-local hideBtn = CreateTopButton("O",-62,Color3.fromRGB(35,35,35))
-local exitBtn = CreateTopButton("X",-28,Color3.fromRGB(255,70,70))
+local minimize = TopButton("-",-96,Color3.fromRGB(40,40,40))
+local hide = TopButton("O",-62,Color3.fromRGB(40,40,40))
+local exit = TopButton("X",-28,Color3.fromRGB(255,70,70))
 
-local container = Instance.new("Frame")
-container.Size = UDim2.new(1,-20,1,-50)
-container.Position = UDim2.new(0,10,0,40)
-container.BackgroundTransparency = 1
-container.Parent = frame
+local content = Instance.new("Frame")
+content.Size = UDim2.new(1,-20,1,-56)
+content.Position = UDim2.new(0,10,0,46)
+content.BackgroundTransparency = 1
+content.Parent = main
 
 local layout = Instance.new("UIListLayout")
 layout.Padding = UDim.new(0,10)
-layout.Parent = container
+layout.Parent = content
 
-local function CreateToggle(name)
+local function CreateToggle(name,callback)
 
     local holder = Instance.new("Frame")
-    holder.Size = UDim2.new(1,0,0,42)
-    holder.BackgroundColor3 = Color3.fromRGB(22,22,22)
+    holder.Size = UDim2.new(1,0,0,48)
+    holder.BackgroundColor3 = Color3.fromRGB(18,18,18)
     holder.BorderSizePixel = 0
-    holder.Parent = container
+    holder.Parent = content
 
-    Instance.new("UICorner", holder).CornerRadius = UDim.new(0,10)
+    Instance.new("UICorner", holder).CornerRadius = UDim.new(0,12)
 
-    local text = Instance.new("TextLabel")
-    text.Size = UDim2.new(0.7,0,1,0)
-    text.Position = UDim2.new(0,12,0,0)
-    text.BackgroundTransparency = 1
-    text.Text = name
-    text.TextColor3 = Color3.fromRGB(255,255,255)
-    text.Font = Enum.Font.GothamMedium
-    text.TextScaled = true
-    text.TextXAlignment = Enum.TextXAlignment.Left
-    text.Parent = holder
+    local txt = Instance.new("TextLabel")
+    txt.Size = UDim2.new(0.6,0,1,0)
+    txt.Position = UDim2.new(0,14,0,0)
+    txt.BackgroundTransparency = 1
+    txt.Text = name
+    txt.TextColor3 = Color3.fromRGB(255,255,255)
+    txt.Font = Enum.Font.GothamMedium
+    txt.TextScaled = true
+    txt.TextXAlignment = Enum.TextXAlignment.Left
+    txt.Parent = holder
 
     local toggle = Instance.new("TextButton")
-    toggle.Size = UDim2.new(0,50,0,24)
-    toggle.Position = UDim2.new(1,-62,0.5,-12)
-    toggle.BackgroundColor3 = Color3.fromRGB(45,45,45)
+    toggle.Size = UDim2.new(0,52,0,26)
+    toggle.Position = UDim2.new(1,-66,0.5,-13)
     toggle.Text = ""
+    toggle.BackgroundColor3 = Color3.fromRGB(45,45,45)
     toggle.Parent = holder
 
     Instance.new("UICorner", toggle).CornerRadius = UDim.new(1,0)
 
     local knob = Instance.new("Frame")
-    knob.Size = UDim2.new(0,20,0,20)
-    knob.Position = UDim2.new(0,2,0.5,-10)
+    knob.Size = UDim2.new(0,22,0,22)
+    knob.Position = UDim2.new(0,2,0.5,-11)
     knob.BackgroundColor3 = Color3.fromRGB(255,255,255)
     knob.Parent = toggle
 
@@ -143,9 +146,9 @@ local function CreateToggle(name)
 
     local state = false
 
-    local function Set(v)
+    toggle.MouseButton1Click:Connect(function()
 
-        state = v
+        state = not state
 
         if state then
 
@@ -154,7 +157,7 @@ local function CreateToggle(name)
             }):Play()
 
             TweenService:Create(knob,TweenInfo.new(0.2),{
-                Position = UDim2.new(1,-22,0.5,-10)
+                Position = UDim2.new(1,-24,0.5,-11)
             }):Play()
 
         else
@@ -164,27 +167,91 @@ local function CreateToggle(name)
             }):Play()
 
             TweenService:Create(knob,TweenInfo.new(0.2),{
-                Position = UDim2.new(0,2,0.5,-10)
+                Position = UDim2.new(0,2,0.5,-11)
             }):Play()
         end
-    end
 
-    toggle.MouseButton1Click:Connect(function()
-
-        Set(not state)
-
-        if name == "Skeleton ESP" then
-            SkeletonESP = state
-        elseif name == "Tracer ESP" then
-            TracerESP = state
-        end
+        callback(state)
     end)
-
-    return holder
 end
 
-CreateToggle("Skeleton ESP")
-CreateToggle("Tracer ESP")
+CreateToggle("Skeleton ESP",function(v)
+    SkeletonESP = v
+end)
+
+CreateToggle("Tracer ESP",function(v)
+    TracerESP = v
+end)
+
+CreateToggle("Aim Assist",function(v)
+    AimAssist = v
+end)
+
+local sliderHolder = Instance.new("Frame")
+sliderHolder.Size = UDim2.new(1,0,0,58)
+sliderHolder.BackgroundColor3 = Color3.fromRGB(18,18,18)
+sliderHolder.BorderSizePixel = 0
+sliderHolder.Parent = content
+
+Instance.new("UICorner", sliderHolder).CornerRadius = UDim.new(0,12)
+
+local sliderLabel = Instance.new("TextLabel")
+sliderLabel.Size = UDim2.new(1,-20,0,20)
+sliderLabel.Position = UDim2.new(0,12,0,6)
+sliderLabel.BackgroundTransparency = 1
+sliderLabel.Text = "Aim Strength : 35"
+sliderLabel.TextColor3 = Color3.fromRGB(255,255,255)
+sliderLabel.Font = Enum.Font.GothamMedium
+sliderLabel.TextScaled = true
+sliderLabel.TextXAlignment = Enum.TextXAlignment.Left
+sliderLabel.Parent = sliderHolder
+
+local sliderBack = Instance.new("Frame")
+sliderBack.Size = UDim2.new(1,-24,0,12)
+sliderBack.Position = UDim2.new(0,12,0,34)
+sliderBack.BackgroundColor3 = Color3.fromRGB(40,40,40)
+sliderBack.Parent = sliderHolder
+
+Instance.new("UICorner", sliderBack).CornerRadius = UDim.new(1,0)
+
+local sliderFill = Instance.new("Frame")
+sliderFill.Size = UDim2.new(0.35,0,1,0)
+sliderFill.BackgroundColor3 = Color3.fromRGB(0,170,255)
+sliderFill.Parent = sliderBack
+
+Instance.new("UICorner", sliderFill).CornerRadius = UDim.new(1,0)
+
+local draggingSlider = false
+
+sliderBack.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        draggingSlider = true
+    end
+end)
+
+UIS.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        draggingSlider = false
+    end
+end)
+
+UIS.InputChanged:Connect(function(input)
+
+    if draggingSlider then
+
+        local mouseX = UIS:GetMouseLocation().X
+        local pos = sliderBack.AbsolutePosition.X
+        local size = sliderBack.AbsoluteSize.X
+
+        local percent = math.clamp((mouseX - pos) / size,0,1)
+
+        sliderFill.Size = UDim2.new(percent,0,1,0)
+
+        AimStrength = math.floor(percent * 100)
+
+        sliderLabel.Text = "Aim Strength : "..AimStrength
+    end
+end)
 
 -------------------------------------------------
 -- DRAGGING
@@ -199,7 +266,7 @@ local function update(input)
 
     local delta = input.Position - dragStart
 
-    frame.Position = UDim2.new(
+    main.Position = UDim2.new(
         startPos.X.Scale,
         startPos.X.Offset + delta.X,
         startPos.Y.Scale,
@@ -207,16 +274,15 @@ local function update(input)
     )
 end
 
-topbar.InputBegan:Connect(function(input)
+top.InputBegan:Connect(function(input)
 
     if input.UserInputType == Enum.UserInputType.MouseButton1 then
 
         dragging = true
         dragStart = input.Position
-        startPos = frame.Position
+        startPos = main.Position
 
         input.Changed:Connect(function()
-
             if input.UserInputState == Enum.UserInputState.End then
                 dragging = false
             end
@@ -224,60 +290,55 @@ topbar.InputBegan:Connect(function(input)
     end
 end)
 
-topbar.InputChanged:Connect(function(input)
-
+top.InputChanged:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseMovement then
         dragInput = input
     end
 end)
 
 UIS.InputChanged:Connect(function(input)
-
     if input == dragInput and dragging then
         update(input)
     end
 end)
 
 -------------------------------------------------
--- BUTTONS
+-- WINDOW BUTTONS
 -------------------------------------------------
 
-appButton.MouseButton1Click:Connect(function()
-
-    Open = not Open
-
-    frame.Visible = Open
+icon.MouseButton1Click:Connect(function()
+    main.Visible = not main.Visible
 end)
 
-minimizeBtn.MouseButton1Click:Connect(function()
+local minimized = false
 
-    Minimized = not Minimized
+minimize.MouseButton1Click:Connect(function()
 
-    if Minimized then
+    minimized = not minimized
 
-        container.Visible = false
+    if minimized then
 
-        TweenService:Create(frame,TweenInfo.new(0.2),{
-            Size = UDim2.new(0,320,0,40)
+        content.Visible = false
+
+        TweenService:Create(main,TweenInfo.new(0.2),{
+            Size = UDim2.new(0,370,0,44)
         }):Play()
 
     else
 
-        container.Visible = true
+        content.Visible = true
 
-        TweenService:Create(frame,TweenInfo.new(0.2),{
-            Size = UDim2.new(0,320,0,240)
+        TweenService:Create(main,TweenInfo.new(0.2),{
+            Size = UDim2.new(0,370,0,300)
         }):Play()
     end
 end)
 
-hideBtn.MouseButton1Click:Connect(function()
-
-    frame.Visible = false
-    Open = false
+hide.MouseButton1Click:Connect(function()
+    main.Visible = false
 end)
 
-exitBtn.MouseButton1Click:Connect(function()
+exit.MouseButton1Click:Connect(function()
 
     for _,data in pairs(ESP) do
 
@@ -310,26 +371,30 @@ local function NewLine()
     return line
 end
 
+local FOVCircle = Drawing.new("Circle")
+FOVCircle.Visible = true
+FOVCircle.Color = Color3.fromRGB(0,170,255)
+FOVCircle.Thickness = 1.5
+FOVCircle.NumSides = 64
+FOVCircle.Filled = false
+FOVCircle.Radius = AimFOV
+
 -------------------------------------------------
--- R6 + R15 SUPPORT
+-- SKELETONS
 -------------------------------------------------
 
 local R15Skeleton = {
     {"Head","UpperTorso"},
     {"UpperTorso","LowerTorso"},
-
     {"UpperTorso","LeftUpperArm"},
     {"LeftUpperArm","LeftLowerArm"},
     {"LeftLowerArm","LeftHand"},
-
     {"UpperTorso","RightUpperArm"},
     {"RightUpperArm","RightLowerArm"},
     {"RightLowerArm","RightHand"},
-
     {"LowerTorso","LeftUpperLeg"},
     {"LeftUpperLeg","LeftLowerLeg"},
     {"LeftLowerLeg","LeftFoot"},
-
     {"LowerTorso","RightUpperLeg"},
     {"RightUpperLeg","RightLowerLeg"},
     {"RightLowerLeg","RightFoot"}
@@ -353,7 +418,7 @@ local function GetSkeleton(character)
 end
 
 -------------------------------------------------
--- ESP
+-- ESP SETUP
 -------------------------------------------------
 
 local function CreateESP(player)
@@ -401,10 +466,54 @@ Players.PlayerAdded:Connect(CreateESP)
 Players.PlayerRemoving:Connect(RemoveESP)
 
 -------------------------------------------------
+-- AIM TARGET
+-------------------------------------------------
+
+local function GetClosestPlayer()
+
+    local closest = nil
+    local shortest = AimFOV
+
+    for _,player in ipairs(Players:GetPlayers()) do
+
+        if player ~= LocalPlayer then
+
+            local char = player.Character
+            local hum = char and char:FindFirstChildOfClass("Humanoid")
+            local head = char and char:FindFirstChild("Head")
+
+            if hum and hum.Health > 0 and head then
+
+                local pos,visible = Camera:WorldToViewportPoint(head.Position)
+
+                if visible then
+
+                    local dist = (
+                        Vector2.new(pos.X,pos.Y)
+                        - UIS:GetMouseLocation()
+                    ).Magnitude
+
+                    if dist < shortest then
+                        shortest = dist
+                        closest = head
+                    end
+                end
+            end
+        end
+    end
+
+    return closest
+end
+
+-------------------------------------------------
 -- RENDER
 -------------------------------------------------
 
 RunService.RenderStepped:Connect(function()
+
+    local mousePos = UIS:GetMouseLocation()
+
+    FOVCircle.Position = mousePos
 
     local myChar = LocalPlayer.Character
     local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
@@ -506,15 +615,8 @@ RunService.RenderStepped:Connect(function()
 
             if myVisible then
 
-                data.Tracer.From = Vector2.new(
-                    myPos.X,
-                    myPos.Y
-                )
-
-                data.Tracer.To = Vector2.new(
-                    rootPos.X,
-                    rootPos.Y
-                )
+                data.Tracer.From = Vector2.new(myPos.X,myPos.Y)
+                data.Tracer.To = Vector2.new(rootPos.X,rootPos.Y)
 
                 data.Tracer.Color = color
                 data.Tracer.Thickness = thickness
@@ -528,4 +630,33 @@ RunService.RenderStepped:Connect(function()
             data.Tracer.Visible = false
         end
     end
+
+    -------------------------------------------------
+    -- AIM ASSIST
+    -------------------------------------------------
+
+    if AimAssist then
+
+        local target = GetClosestPlayer()
+
+        if target then
+
+            local predicted = target.Position
+
+            local smoothness = math.clamp(
+                AimStrength / 100,
+                0.03,
+                1
+            )
+
+            Camera.CFrame = Camera.CFrame:Lerp(
+                CFrame.new(
+                    Camera.CFrame.Position,
+                    predicted
+                ),
+                smoothness * 0.12
+            )
+        end
+    end
 end)
+```
