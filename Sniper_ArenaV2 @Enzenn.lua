@@ -1,5 +1,5 @@
 -- Modern UNO HUB v9.0
-# Slider drag fixed, aimbot magnet feel tuned
+
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
