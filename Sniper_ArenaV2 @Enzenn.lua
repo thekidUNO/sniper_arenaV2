@@ -1,6 +1,3 @@
-# UNO HUB — Fixed GUI + Stable ESP
-
-```lua
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UIS = game:GetService("UserInputService")
@@ -8,6 +5,10 @@ local TweenService = game:GetService("TweenService")
 local Camera = workspace.CurrentCamera
 
 local LocalPlayer = Players.LocalPlayer
+
+if game.CoreGui:FindFirstChild("UnoHub") then
+    game.CoreGui.UnoHub:Destroy()
+end
 
 local ESP = {}
 
@@ -32,6 +33,7 @@ appButton.Position = UDim2.new(0,20,0.5,-30)
 appButton.BackgroundColor3 = Color3.fromRGB(15,15,15)
 appButton.Image = "rbxassetid://7733960981"
 appButton.Parent = gui
+appButton.AutoButtonColor = false
 
 Instance.new("UICorner", appButton).CornerRadius = UDim.new(1,0)
 
@@ -71,6 +73,7 @@ title.TextScaled = true
 title.Parent = topbar
 
 local function CreateTopButton(text,x,color)
+
     local b = Instance.new("TextButton")
     b.Size = UDim2.new(0,28,0,28)
     b.Position = UDim2.new(1,x,0,4)
@@ -141,9 +144,11 @@ local function CreateToggle(name)
     local state = false
 
     local function Set(v)
+
         state = v
 
         if state then
+
             TweenService:Create(toggle,TweenInfo.new(0.2),{
                 BackgroundColor3 = Color3.fromRGB(0,170,255)
             }):Play()
@@ -151,7 +156,9 @@ local function CreateToggle(name)
             TweenService:Create(knob,TweenInfo.new(0.2),{
                 Position = UDim2.new(1,-22,0.5,-10)
             }):Play()
+
         else
+
             TweenService:Create(toggle,TweenInfo.new(0.2),{
                 BackgroundColor3 = Color3.fromRGB(45,45,45)
             }):Play()
@@ -163,6 +170,7 @@ local function CreateToggle(name)
     end
 
     toggle.MouseButton1Click:Connect(function()
+
         Set(not state)
 
         if name == "Skeleton ESP" then
@@ -188,6 +196,7 @@ local dragStart
 local startPos
 
 local function update(input)
+
     local delta = input.Position - dragStart
 
     frame.Position = UDim2.new(
@@ -199,12 +208,15 @@ local function update(input)
 end
 
 topbar.InputBegan:Connect(function(input)
+
     if input.UserInputType == Enum.UserInputType.MouseButton1 then
+
         dragging = true
         dragStart = input.Position
         startPos = frame.Position
 
         input.Changed:Connect(function()
+
             if input.UserInputState == Enum.UserInputState.End then
                 dragging = false
             end
@@ -213,12 +225,14 @@ topbar.InputBegan:Connect(function(input)
 end)
 
 topbar.InputChanged:Connect(function(input)
+
     if input.UserInputType == Enum.UserInputType.MouseMovement then
         dragInput = input
     end
 end)
 
 UIS.InputChanged:Connect(function(input)
+
     if input == dragInput and dragging then
         update(input)
     end
@@ -240,12 +254,15 @@ minimizeBtn.MouseButton1Click:Connect(function()
     Minimized = not Minimized
 
     if Minimized then
+
         container.Visible = false
 
         TweenService:Create(frame,TweenInfo.new(0.2),{
             Size = UDim2.new(0,320,0,40)
         }):Play()
+
     else
+
         container.Visible = true
 
         TweenService:Create(frame,TweenInfo.new(0.2),{
@@ -255,6 +272,7 @@ minimizeBtn.MouseButton1Click:Connect(function()
 end)
 
 hideBtn.MouseButton1Click:Connect(function()
+
     frame.Visible = false
     Open = false
 end)
@@ -278,7 +296,7 @@ exitBtn.MouseButton1Click:Connect(function()
 end)
 
 -------------------------------------------------
--- ESP
+-- DRAWING
 -------------------------------------------------
 
 local function NewLine()
@@ -292,22 +310,51 @@ local function NewLine()
     return line
 end
 
-local SkeletonConnections = {
+-------------------------------------------------
+-- R6 + R15 SUPPORT
+-------------------------------------------------
+
+local R15Skeleton = {
     {"Head","UpperTorso"},
     {"UpperTorso","LowerTorso"},
+
     {"UpperTorso","LeftUpperArm"},
     {"LeftUpperArm","LeftLowerArm"},
     {"LeftLowerArm","LeftHand"},
+
     {"UpperTorso","RightUpperArm"},
     {"RightUpperArm","RightLowerArm"},
     {"RightLowerArm","RightHand"},
+
     {"LowerTorso","LeftUpperLeg"},
     {"LeftUpperLeg","LeftLowerLeg"},
     {"LeftLowerLeg","LeftFoot"},
+
     {"LowerTorso","RightUpperLeg"},
     {"RightUpperLeg","RightLowerLeg"},
     {"RightLowerLeg","RightFoot"}
 }
+
+local R6Skeleton = {
+    {"Head","Torso"},
+    {"Torso","Left Arm"},
+    {"Torso","Right Arm"},
+    {"Torso","Left Leg"},
+    {"Torso","Right Leg"}
+}
+
+local function GetSkeleton(character)
+
+    if character:FindFirstChild("UpperTorso") then
+        return R15Skeleton
+    end
+
+    return R6Skeleton
+end
+
+-------------------------------------------------
+-- ESP
+-------------------------------------------------
 
 local function CreateESP(player)
 
@@ -317,7 +364,7 @@ local function CreateESP(player)
 
     local skeleton = {}
 
-    for i = 1,#SkeletonConnections do
+    for i = 1,14 do
         skeleton[i] = NewLine()
     end
 
@@ -408,6 +455,8 @@ RunService.RenderStepped:Connect(function()
 
         if SkeletonESP then
 
+            local SkeletonConnections = GetSkeleton(char)
+
             for i,bones in ipairs(SkeletonConnections) do
 
                 local p0 = char:FindFirstChild(bones[1])
@@ -480,17 +529,3 @@ RunService.RenderStepped:Connect(function()
         end
     end
 end)
-```
-
-This version fixes:
-
-* broken skeleton flicker
-* tracer stretching
-* UI drag bugs
-* hide/minimize issues
-* full unload cleanup
-* floating app icon
-* smoother UI
-* stable ESP rendering
-* dead player cleanup
-* cleaner modern look
