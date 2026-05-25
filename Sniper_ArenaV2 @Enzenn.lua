@@ -1,4 +1,4 @@
--- Modern UNO HUB v17.1 — Clean FOV Trigger, Fixed Tracer, Working Exit
+-- Modern UNO HUB v17.2 — Fixed FOV Circle, Exit, Speed Hack
 -- Fixes: FOV-based trigger mode, auto headshot locking, FOV circle resize,
 -- ESP consistency, bounding box cache invalidation, skeleton cache sync,
 -- smoothness inversion, aim strength uncapped, dead player cleanup
@@ -182,6 +182,8 @@ local Features = {
     RenderDistance = 1500,
     TeamCheck = false,
     ShowFOVCircle = true,
+    SpeedHack = false,
+    SpeedMultiplier = 1,
 }
 
 local ThicknessSettings = {
@@ -411,7 +413,7 @@ local subText = Instance.new("TextLabel")
 subText.Size = UDim2.new(0, 120, 0, 14)
 subText.Position = UDim2.new(0, 34, 0, 22)
 subText.BackgroundTransparency = 1
-subText.Text = "v17.1 | Clean FOV"
+subText.Text = "v17.2 | Fixed Circle + Speed"
 subText.TextColor3 = Color3.fromRGB(130, 130, 140)
 subText.Font = Enum.Font.Gotham
 subText.TextSize = 9
@@ -844,6 +846,14 @@ CreateSlider(combatScroll, "Prediction", 0, 250, 0, function(v)
     Features.PredictionMs = v
 end, "ms")
 
+CreateToggle(combatScroll, "Speed Hack", false, function(v)
+    Features.SpeedHack = v
+end)
+
+CreateSlider(combatScroll, "Speed Multiplier", 1, 50, 1, function(v)
+    Features.SpeedMultiplier = v
+end, "x")
+
 CreateSlider(combatScroll, "Aim FOV", 10, 300, 140, function(v)
     Features.AimFOV = v
 end, "")
@@ -1002,57 +1012,66 @@ end)
 -- EXIT CLEANUP
 -- =============================================
 Janitor:Connect(exitBtn.MouseButton1Click, function()
-    -- Hide FOV circle immediately
+    -- STEP 1: Stop all rendering by hiding everything
     if FOVCircle then
         pcall(function() FOVCircle.Visible = false end)
-        pcall(function() FOVCircle:Remove() end)
     end
 
-    -- Clear all ESP drawings first
     for player, data in pairs(ESP) do
         if data then
+            pcall(function() if data.Tracer then data.Tracer.Visible = false end end)
+            pcall(function() if data.Line then data.Line.Visible = false end end)
             for _, l in pairs(data.Skeleton) do 
-                if l then 
-                    pcall(function() l.Visible = false end)
-                    pcall(function() l:Remove() end)
-                end 
-            end
-            if data.Tracer then
-                pcall(function() data.Tracer.Visible = false end)
-                pcall(function() data.Tracer:Remove() end)
+                pcall(function() if l then l.Visible = false end end)
             end
             for _, l in pairs(data.Box) do 
-                if l then 
-                    pcall(function() l.Visible = false end)
-                    pcall(function() l:Remove() end)
-                end 
-            end
-            if data.Line then
-                pcall(function() data.Line.Visible = false end)
-                pcall(function() data.Line:Remove() end)
+                pcall(function() if l then l.Visible = false end end)
             end
         end
     end
 
-    -- Disconnect all connections
-    Janitor:Cleanup()
-
-    -- Clear all state
-    targetSnapshot = nil
-    targetSnapshotPlayer = nil
-    ESP = {}
-    PlayerHealthConnections = {}
-    PlayerSkeletonParts = {}
-    BoundingBoxCache = {}
-    OcclusionCache = {}
-    table.clear(CachedTargets)
-    table.clear(RenderSnapshots)
-
-    -- Destroy GUI
+    -- STEP 2: Destroy the GUI first (stops all UI interactions)
     pcall(function() 
-        if gui and gui.Parent then
+        if gui then
+            gui.Enabled = false
             gui:Destroy() 
         end
+    end)
+
+    -- STEP 3: Wait a frame then remove all Drawing objects
+    task.delay(0.05, function()
+        -- Remove FOV circle
+        if FOVCircle then
+            pcall(function() FOVCircle:Remove() end)
+        end
+
+        -- Remove all ESP drawings
+        for player, data in pairs(ESP) do
+            if data then
+                for _, l in pairs(data.Skeleton) do 
+                    pcall(function() if l then l:Remove() end end)
+                end
+                pcall(function() if data.Tracer then data.Tracer:Remove() end end)
+                for _, l in pairs(data.Box) do 
+                    pcall(function() if l then l:Remove() end end)
+                end
+                pcall(function() if data.Line then data.Line:Remove() end end)
+            end
+        end
+
+        -- STEP 4: Disconnect everything
+        Janitor:Cleanup()
+
+        -- STEP 5: Clear all state
+        targetSnapshot = nil
+        targetSnapshotPlayer = nil
+        ESP = {}
+        PlayerHealthConnections = {}
+        PlayerSkeletonParts = {}
+        BoundingBoxCache = {}
+        OcclusionCache = {}
+        table.clear(CachedTargets)
+        table.clear(RenderSnapshots)
     end)
 end)
 
@@ -1359,11 +1378,6 @@ Janitor:Connect(RunService.RenderStepped, function(dt)
     -- Update bounding box cache
     UpdateBoundingBoxCache(now)
 
-    -- Update FOV circle
-    if FOVCircle then
-        FOVCircle.NumSides = Features.AimFOV < 80 and 32 or (Features.AimFOV < 160 and 48 or 64)
-    end
-
     -- =============================================
     -- AIMBOT STATE MANAGEMENT
     -- =============================================
@@ -1446,14 +1460,38 @@ Janitor:Connect(RunService.RenderStepped, function(dt)
     end
 
     -- =============================================
-    -- FOV CIRCLE VISIBILITY
+    -- SPEED HACK
+    -- =============================================
+    if Features.SpeedHack then
+        local char = LocalPlayer.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if hum then
+            local baseSpeed = 16 -- Default Roblox walkspeed
+            local targetSpeed = baseSpeed * Features.SpeedMultiplier
+            -- Only set if significantly different to avoid jitter
+            if math.abs(hum.WalkSpeed - targetSpeed) > 1 then
+                hum.WalkSpeed = targetSpeed
+            end
+        end
+    else
+        -- Reset to normal when disabled
+        local char = LocalPlayer.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if hum and hum.WalkSpeed > 20 then
+            hum.WalkSpeed = 16
+        end
+    end
+
+    -- =============================================
+    -- FOV CIRCLE
     -- =============================================
     if Executor.Drawing and FOVCircle then
         local screenCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
         FOVCircle.Position = screenCenter
         FOVCircle.Radius = Features.AimFOV
         FOVCircle.Color = Features.ESPColor
-
+        FOVCircle.Thickness = 1.5
+        FOVCircle.NumSides = Features.AimFOV < 80 and 32 or (Features.AimFOV < 160 and 48 or 64)
         FOVCircle.Visible = Features.ShowFOVCircle and Features.AimAssist
     end
 
