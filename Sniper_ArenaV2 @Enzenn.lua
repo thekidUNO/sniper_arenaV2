@@ -1,7 +1,5 @@
--- Modern UNO HUB v17.2 — Fixed FOV Circle, Exit, Speed Hack
--- Fixes: FOV-based trigger mode, auto headshot locking, FOV circle resize,
--- ESP consistency, bounding box cache invalidation, skeleton cache sync,
--- smoothness inversion, aim strength uncapped, dead player cleanup
+-- Modern UNO HUB v18.1 — Working FOV Circle, CFrame Speed Hack, Dead Skeleton Fix,
+-- Ping Prediction, Snap Speed Merge, Lightweight Box ESP
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -172,9 +170,8 @@ local Features = {
     LineESP = false,
     AimAssist = false,
     AutoHeadshot = false,
-    AimActive = false,           -- Computed: true when target in FOV + visible
-    AimStrength = 100,           -- Default 100% for instant snap feel
-    AimSmoothness = 0,           -- Default 0% for instant snap feel
+    AimActive = false,
+    SnapSpeed = 50,
     AimFOV = 140,
     ESPColor = Color3.fromRGB(0, 170, 255),
     ESPThickness = 2,
@@ -209,7 +206,7 @@ Janitor:Connect(LocalPlayer.CharacterAdded, function(char)
     RayParams.FilterDescendantsInstances = {char}
 end)
 
--- Multi-pass transparent reraycast (up to 5 attempts)
+-- Multi-pass transparent reraycast
 local function IsVisible(targetPart, targetCharacter)
     if not targetPart or not targetPart.Parent then return false end
     local origin = Camera.CFrame.Position
@@ -339,7 +336,7 @@ gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 SafeParent(gui)
 
 local WIN_W = isMobile and 340 or 400
-local WIN_H = isMobile and 300 or 340
+local WIN_H = isMobile and 320 or 360
 
 local main = Instance.new("Frame")
 main.Size = UDim2.new(0, WIN_W, 0, WIN_H)
@@ -413,7 +410,7 @@ local subText = Instance.new("TextLabel")
 subText.Size = UDim2.new(0, 120, 0, 14)
 subText.Position = UDim2.new(0, 34, 0, 22)
 subText.BackgroundTransparency = 1
-subText.Text = "v17.2 | Fixed Circle + Speed"
+subText.Text = "v18.1 | Circle + Speed Fix"
 subText.TextColor3 = Color3.fromRGB(130, 130, 140)
 subText.Font = Enum.Font.Gotham
 subText.TextSize = 9
@@ -834,17 +831,18 @@ CreateToggle(combatScroll, "Auto Headshot", false, function(v)
     Features.AutoHeadshot = v
 end)
 
-CreateSlider(combatScroll, "Aim Strength", 0, 100, 100, function(v)
-    Features.AimStrength = v
-end, "%")
-
-CreateSlider(combatScroll, "Smoothness", 0, 100, 0, function(v)
-    Features.AimSmoothness = v
+-- MERGED: Single Snap Speed slider
+CreateSlider(combatScroll, "Snap Speed", 0, 100, 50, function(v)
+    Features.SnapSpeed = v
 end, "%")
 
 CreateSlider(combatScroll, "Prediction", 0, 250, 0, function(v)
     Features.PredictionMs = v
 end, "ms")
+
+CreateSlider(combatScroll, "Aim FOV", 10, 300, 140, function(v)
+    Features.AimFOV = v
+end, "")
 
 CreateToggle(combatScroll, "Speed Hack", false, function(v)
     Features.SpeedHack = v
@@ -853,10 +851,6 @@ end)
 CreateSlider(combatScroll, "Speed Multiplier", 1, 50, 1, function(v)
     Features.SpeedMultiplier = v
 end, "x")
-
-CreateSlider(combatScroll, "Aim FOV", 10, 300, 140, function(v)
-    Features.AimFOV = v
-end, "")
 
 -- =============================================
 -- POPULATE VISUAL TAB
@@ -883,9 +877,6 @@ end)
 
 CreateToggle(visualScroll, "Show FOV Circle", true, function(v)
     Features.ShowFOVCircle = v
-    if FOVCircle then
-        FOVCircle.Visible = v and Features.AimAssist
-    end
 end)
 
 CreateSlider(visualScroll, "Line Thickness", 1, 5, 2, function(v)
@@ -912,9 +903,11 @@ CreateDropdown(visualScroll, "ESP Color", {"Cyan", "Red", "Green", "Purple", "Ye
     Features.ESPColor = colors[v] or colors.Cyan
     iconStroke.Color = Features.ESPColor
     titleIcon.ImageColor3 = Features.ESPColor
-    if FOVCircle then
-        FOVCircle.Color = Features.ESPColor
-    end
+    pcall(function()
+        if FOVCircle then
+            FOVCircle.Color = Features.ESPColor
+        end
+    end)
 end)
 
 -- =============================================
@@ -1012,7 +1005,7 @@ end)
 -- EXIT CLEANUP
 -- =============================================
 Janitor:Connect(exitBtn.MouseButton1Click, function()
-    -- STEP 1: Stop all rendering by hiding everything
+    -- STEP 1: Hide all Drawing objects immediately
     if FOVCircle then
         pcall(function() FOVCircle.Visible = false end)
     end
@@ -1030,7 +1023,7 @@ Janitor:Connect(exitBtn.MouseButton1Click, function()
         end
     end
 
-    -- STEP 2: Destroy the GUI first (stops all UI interactions)
+    -- STEP 2: Destroy the GUI first
     pcall(function() 
         if gui then
             gui.Enabled = false
@@ -1038,14 +1031,12 @@ Janitor:Connect(exitBtn.MouseButton1Click, function()
         end
     end)
 
-    -- STEP 3: Wait a frame then remove all Drawing objects
+    -- STEP 3: Wait then remove all Drawing objects
     task.delay(0.05, function()
-        -- Remove FOV circle
         if FOVCircle then
             pcall(function() FOVCircle:Remove() end)
         end
 
-        -- Remove all ESP drawings
         for player, data in pairs(ESP) do
             if data then
                 for _, l in pairs(data.Skeleton) do 
@@ -1059,10 +1050,8 @@ Janitor:Connect(exitBtn.MouseButton1Click, function()
             end
         end
 
-        -- STEP 4: Disconnect everything
         Janitor:Cleanup()
 
-        -- STEP 5: Clear all state
         targetSnapshot = nil
         targetSnapshotPlayer = nil
         ESP = {}
@@ -1071,7 +1060,6 @@ Janitor:Connect(exitBtn.MouseButton1Click, function()
         BoundingBoxCache = {}
         OcclusionCache = {}
         table.clear(CachedTargets)
-        table.clear(RenderSnapshots)
     end)
 end)
 
@@ -1087,12 +1075,13 @@ local function NewLine()
     return Janitor:AddDrawing(line)
 end
 
+-- FOV Circle: No pcall, direct creation
 local FOVCircle
 if Executor.Drawing then
     FOVCircle = Drawing.new("Circle")
     FOVCircle.Visible = false
     FOVCircle.Color = Features.ESPColor
-    FOVCircle.Thickness = 1.5
+    FOVCircle.Thickness = 2
     FOVCircle.NumSides = 64
     FOVCircle.Filled = false
     FOVCircle.Radius = Features.AimFOV
@@ -1187,6 +1176,12 @@ local function CreateESP(player)
                     for _, l in pairs(data.Skeleton) do if l then l.Visible = false end end
                     for _, l in pairs(data.Box) do if l then l.Visible = false end end
                 end
+                -- FIX: Clear target if this player was locked
+                if targetSnapshotPlayer == player then
+                    targetSnapshot = nil
+                    targetSnapshotPlayer = nil
+                    Features.AimActive = false
+                end
             else
                 local data = ESP[player]
                 if data then data.IsDead = false end
@@ -1203,6 +1198,12 @@ local function CreateESP(player)
                 for _, l in pairs(data.Skeleton) do if l then l.Visible = false end end
                 for _, l in pairs(data.Box) do if l then l.Visible = false end end
             end
+            -- FIX: Clear target immediately on death
+            if targetSnapshotPlayer == player then
+                targetSnapshot = nil
+                targetSnapshotPlayer = nil
+                Features.AimActive = false
+            end
         end)
         table.insert(PlayerHealthConnections[player], diedConn)
     end
@@ -1213,7 +1214,6 @@ local function CreateESP(player)
     Janitor:Connect(player.CharacterAdded, function(newChar)
         if not newChar or not newChar.Parent then return end
 
-        -- Clear bounding box cache on respawn
         BoundingBoxCache[player] = nil
 
         local data = ESP[player]
@@ -1328,10 +1328,36 @@ local function UpdateESPThrottle(dt)
     end
 end
 
--- Bounding box cache
+-- Lightweight bounding box using manual part positions (no GetBoundingBox)
 local BoundingBoxCache = {}
 local BoundingBoxCacheInterval = 0.2
 local LastBoundingBoxUpdate = 0
+
+local function GetCharacterBounds(char)
+    local minX, minY, minZ = math.huge, math.huge, math.huge
+    local maxX, maxY, maxZ = -math.huge, -math.huge, -math.huge
+    local hasParts = false
+
+    for _, part in ipairs(char:GetDescendants()) do
+        if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+            local pos = part.Position
+            local size = part.Size
+            minX = math.min(minX, pos.X - size.X/2)
+            minY = math.min(minY, pos.Y - size.Y/2)
+            minZ = math.min(minZ, pos.Z - size.Z/2)
+            maxX = math.max(maxX, pos.X + size.X/2)
+            maxY = math.max(maxY, pos.Y + size.Y/2)
+            maxZ = math.max(maxZ, pos.Z + size.Z/2)
+            hasParts = true
+        end
+    end
+
+    if not hasParts then return nil, nil end
+
+    local center = Vector3.new((minX + maxX)/2, (minY + maxY)/2, (minZ + maxZ)/2)
+    local size = Vector3.new(maxX - minX, maxY - minY, maxZ - minZ)
+    return CFrame.new(center), size
+end
 
 local function UpdateBoundingBoxCache(now)
     if now - LastBoundingBoxUpdate < BoundingBoxCacheInterval then return end
@@ -1344,10 +1370,8 @@ local function UpdateBoundingBoxCache(now)
         end
         local char = player.Character
         if char then
-            local success, cf, size = pcall(function()
-                return char:GetBoundingBox()
-            end)
-            if success and cf and size then
+            local cf, size = GetCharacterBounds(char)
+            if cf and size then
                 BoundingBoxCache[player] = {
                     CFrame = cf,
                     Size = size,
@@ -1362,10 +1386,34 @@ local function UpdateBoundingBoxCache(now)
     end
 end
 
+-- Ping estimation for prediction
+local EstimatedPing = 0
+local LastPingUpdate = 0
+
+local function UpdatePingEstimate()
+    local now = tick()
+    if now - LastPingUpdate < 1 then return end
+    LastPingUpdate = now
+    local stats = game:GetService("Stats")
+    if stats then
+        local network = stats:FindFirstChild("Network")
+        if network then
+            local serverStats = network:FindFirstChild("ServerStatsItem")
+            if serverStats then
+                local ping = serverStats:FindFirstChild("Ping")
+                if ping then
+                    EstimatedPing = ping:GetValue() or 0
+                end
+            end
+        end
+    end
+end
+
 Janitor:Connect(RunService.RenderStepped, function(dt)
     local now = tick()
 
     UpdateESPThrottle(dt)
+    UpdatePingEstimate()
 
     -- =============================================
     -- TARGET CACHE UPDATE
@@ -1375,13 +1423,12 @@ Janitor:Connect(RunService.RenderStepped, function(dt)
         UpdateTargetCache()
     end
 
-    -- Update bounding box cache
     UpdateBoundingBoxCache(now)
 
     -- =============================================
     -- AIMBOT STATE MANAGEMENT
     -- =============================================
-    -- Validate current target
+    -- FIX: Validate current target every frame for death/visibility
     if targetSnapshot and targetSnapshotPlayer then
         local char = targetSnapshotPlayer.Character
         local hum = char and char:FindFirstChildOfClass("Humanoid")
@@ -1390,14 +1437,17 @@ Janitor:Connect(RunService.RenderStepped, function(dt)
         if not hum or hum.Health <= 0 or not head or head ~= targetSnapshot then
             targetSnapshot = nil
             targetSnapshotPlayer = nil
+            Features.AimActive = false
         else
             local pos, onScreen = Camera:WorldToViewportPoint(head.Position)
-            if not onScreen then
+            if not onScreen or pos.Z < 0 then
                 targetSnapshot = nil
                 targetSnapshotPlayer = nil
+                Features.AimActive = false
             elseif not IsVisibleCached(head, char) then
                 targetSnapshot = nil
                 targetSnapshotPlayer = nil
+                Features.AimActive = false
             end
         end
     end
@@ -1414,7 +1464,6 @@ Janitor:Connect(RunService.RenderStepped, function(dt)
                 Features.AimActive = false
             end
         else
-            -- Keep AimActive true as long as we have a valid target
             Features.AimActive = true
         end
     end
@@ -1423,16 +1472,11 @@ Janitor:Connect(RunService.RenderStepped, function(dt)
     -- AIM EXECUTION
     -- =============================================
     if Features.AimAssist and Features.AimActive and targetSnapshot then
-        -- FIX: Smoothness is now correct — 0% = instant, 100% = very smooth
-        -- Strength controls how much of the delta we apply per frame
-        local strengthFactor = Features.AimStrength / 100
-        local smoothFactor = math.clamp(1 - (Features.AimSmoothness / 100), 0.001, 1.0)
+        -- MERGED: SnapSpeed controls everything (0% = smooth, 100% = instant)
+        local snapFactor = Features.SnapSpeed / 100
+        local fpsCompensatedAlpha = math.clamp(snapFactor * (dt * 60), 0.001, 1.0)
 
-        -- Combined alpha: strength * smoothness, with FPS compensation
-        local baseAlpha = strengthFactor * smoothFactor
-        local fpsCompensatedAlpha = math.clamp(baseAlpha * (dt * 60), 0.001, 1.0)
-
-        -- Auto Headshot: always aim at head position
+        -- Auto Headshot: always resolve head position live
         local aimTarget = targetSnapshot
         if Features.AutoHeadshot and targetSnapshotPlayer then
             local char = targetSnapshotPlayer.Character
@@ -1450,7 +1494,17 @@ Janitor:Connect(RunService.RenderStepped, function(dt)
                 local hrp = aimTarget.Parent:FindFirstChild("HumanoidRootPart")
                 if hrp then
                     local vel = hrp.AssemblyLinearVelocity or hrp.Velocity or Vector3.zero
-                    predictedPos = aimTarget.Position + (vel * (Features.PredictionMs / 1000))
+                    local gravity = workspace.Gravity
+                    local timeAhead = (Features.PredictionMs + EstimatedPing) / 1000
+
+                    predictedPos = aimTarget.Position + (vel * timeAhead)
+
+                    -- Gravity compensation for jumping/falling
+                    if vel.Y > 0.5 then
+                        predictedPos = predictedPos - Vector3.new(0, gravity * 0.5 * timeAhead * timeAhead, 0)
+                    elseif vel.Y < -0.5 then
+                        predictedPos = predictedPos - Vector3.new(0, gravity * 0.3 * timeAhead * timeAhead, 0)
+                    end
                 end
             end
 
@@ -1460,40 +1514,23 @@ Janitor:Connect(RunService.RenderStepped, function(dt)
     end
 
     -- =============================================
-    -- SPEED HACK
-    -- =============================================
-    if Features.SpeedHack then
-        local char = LocalPlayer.Character
-        local hum = char and char:FindFirstChildOfClass("Humanoid")
-        if hum then
-            local baseSpeed = 16 -- Default Roblox walkspeed
-            local targetSpeed = baseSpeed * Features.SpeedMultiplier
-            -- Only set if significantly different to avoid jitter
-            if math.abs(hum.WalkSpeed - targetSpeed) > 1 then
-                hum.WalkSpeed = targetSpeed
-            end
-        end
-    else
-        -- Reset to normal when disabled
-        local char = LocalPlayer.Character
-        local hum = char and char:FindFirstChildOfClass("Humanoid")
-        if hum and hum.WalkSpeed > 20 then
-            hum.WalkSpeed = 16
-        end
-    end
-
-    -- =============================================
-    -- FOV CIRCLE
+    -- FOV CIRCLE (Always updated, not throttled)
     -- =============================================
     if Executor.Drawing and FOVCircle then
         local screenCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
         FOVCircle.Position = screenCenter
         FOVCircle.Radius = Features.AimFOV
         FOVCircle.Color = Features.ESPColor
-        FOVCircle.Thickness = 1.5
-        FOVCircle.NumSides = Features.AimFOV < 80 and 32 or (Features.AimFOV < 160 and 48 or 64)
-        FOVCircle.Visible = Features.ShowFOVCircle and Features.AimAssist
+        FOVCircle.Thickness = 2
+        FOVCircle.NumSides = math.clamp(math.floor(Features.AimFOV / 3), 32, 128)
+        -- Show circle when toggle is ON (independent of AimAssist)
+        FOVCircle.Visible = Features.ShowFOVCircle
     end
+
+    -- =============================================
+    -- SPEED HACK (CFrame-based, bypasses velocity checks)
+    -- =============================================
+    -- Handled in Heartbeat below for physics sync
 
     -- =============================================
     -- ESP (Throttled)
@@ -1521,7 +1558,6 @@ Janitor:Connect(RunService.RenderStepped, function(dt)
             continue
         end
 
-        -- Team check in render
         if Features.TeamCheck then
             local myTeam = LocalPlayer.Team
             local theirTeam = player.Team
@@ -1589,7 +1625,7 @@ Janitor:Connect(RunService.RenderStepped, function(dt)
             end
         end
 
-        -- TRACER (FIXED: Always from bottom center of screen, not from player world pos)
+        -- TRACER (FIXED: Always from bottom center of screen)
         if Features.TracerESP then
             local screenBottom = Camera.ViewportSize.Y
             data.Tracer.From = Vector2.new(Camera.ViewportSize.X / 2, screenBottom)
@@ -1599,7 +1635,7 @@ Janitor:Connect(RunService.RenderStepped, function(dt)
             data.Tracer.Visible = true
         end
 
-        -- BOX ESP
+        -- BOX ESP (Lightweight: manual bounds)
         if Features.BoxESP then
             local boxCache = BoundingBoxCache[snap.Player]
             if boxCache and boxCache.CFrame and boxCache.Size then
@@ -1704,6 +1740,45 @@ Janitor:Connect(RunService.RenderStepped, function(dt)
             data.Line.Visible = true
         end
     end
+end)
+
+
+-- =============================================
+-- SPEED HACK HEARTBEAT (Reliable CFrame method)
+-- =============================================
+local LastSpeedPos = nil
+Janitor:Connect(RunService.Heartbeat, function(dt)
+    if not Features.SpeedHack then
+        LastSpeedPos = nil
+        return
+    end
+
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not hrp or not hum then return end
+
+    local moveDir = hum.MoveDirection
+    if moveDir.Magnitude < 0.1 then
+        LastSpeedPos = hrp.Position
+        return
+    end
+
+    local speedBoost = Features.SpeedMultiplier
+    if speedBoost <= 1 then return end
+
+    -- Method 1: CFrame multiplication (works on most games)
+    local moveVector = moveDir * 16 * (speedBoost - 1) * dt
+    hrp.CFrame = hrp.CFrame + moveVector
+
+    -- Method 2: Also boost velocity for games that use it
+    local currentVel = hrp.AssemblyLinearVelocity
+    local boostedVel = Vector3.new(
+        moveDir.X * 16 * speedBoost,
+        currentVel.Y,
+        moveDir.Z * 16 * speedBoost
+    )
+    hrp.AssemblyLinearVelocity = boostedVel
 end)
 
 -- =============================================
