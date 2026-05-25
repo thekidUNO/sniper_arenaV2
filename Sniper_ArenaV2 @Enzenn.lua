@@ -1,4 +1,4 @@
--- Modern UNO HUB v17.0 — FOV Trigger Aimbot, Auto Headshot Fix, ESP Stability
+-- Modern UNO HUB v17.1 — Clean FOV Trigger, Fixed Tracer, Working Exit
 -- Fixes: FOV-based trigger mode, auto headshot locking, FOV circle resize,
 -- ESP consistency, bounding box cache invalidation, skeleton cache sync,
 -- smoothness inversion, aim strength uncapped, dead player cleanup
@@ -173,7 +173,6 @@ local Features = {
     AimAssist = false,
     AutoHeadshot = false,
     AimActive = false,           -- Computed: true when target in FOV + visible
-    AimMode = "FOV Trigger",     -- "FOV Trigger" or "Hold to Aim"
     AimStrength = 100,           -- Default 100% for instant snap feel
     AimSmoothness = 0,           -- Default 0% for instant snap feel
     AimFOV = 140,
@@ -182,7 +181,7 @@ local Features = {
     PredictionMs = 0,
     RenderDistance = 1500,
     TeamCheck = false,
-    AlwaysShowFOV = true,
+    ShowFOVCircle = true,
 }
 
 local ThicknessSettings = {
@@ -412,7 +411,7 @@ local subText = Instance.new("TextLabel")
 subText.Size = UDim2.new(0, 120, 0, 14)
 subText.Position = UDim2.new(0, 34, 0, 22)
 subText.BackgroundTransparency = 1
-subText.Text = "v17.0 | FOV Trigger"
+subText.Text = "v17.1 | Clean FOV"
 subText.TextColor3 = Color3.fromRGB(130, 130, 140)
 subText.Font = Enum.Font.Gotham
 subText.TextSize = 9
@@ -833,14 +832,6 @@ CreateToggle(combatScroll, "Auto Headshot", false, function(v)
     Features.AutoHeadshot = v
 end)
 
-CreateDropdown(combatScroll, "Aim Mode", {"FOV Trigger", "Hold to Aim"}, "FOV Trigger", function(v)
-    Features.AimMode = v
-    -- Reset aim state when switching modes
-    Features.AimActive = false
-    targetSnapshot = nil
-    targetSnapshotPlayer = nil
-end)
-
 CreateSlider(combatScroll, "Aim Strength", 0, 100, 100, function(v)
     Features.AimStrength = v
 end, "%")
@@ -880,8 +871,11 @@ CreateToggle(visualScroll, "Team Check", false, function(v)
     Features.TeamCheck = v
 end)
 
-CreateToggle(visualScroll, "Always Show FOV", true, function(v)
-    Features.AlwaysShowFOV = v
+CreateToggle(visualScroll, "Show FOV Circle", true, function(v)
+    Features.ShowFOVCircle = v
+    if FOVCircle then
+        FOVCircle.Visible = v and Features.AimAssist
+    end
 end)
 
 CreateSlider(visualScroll, "Line Thickness", 1, 5, 2, function(v)
@@ -984,64 +978,6 @@ Janitor:Connect(icon.MouseButton1Click, function()
 end)
 
 -- =============================================
--- PC AIM INPUT (Hold to Aim mode only)
--- =============================================
-if isPC then
-    Janitor:Connect(UIS.InputBegan, function(input, gameProcessed)
-        if Features.AimMode == "Hold to Aim" and not gameProcessed and input.UserInputType == Enum.UserInputType.MouseButton2 then
-            Features.AimActive = true
-        end
-    end)
-
-    Janitor:Connect(UIS.InputEnded, function(input)
-        if Features.AimMode == "Hold to Aim" and input.UserInputType == Enum.UserInputType.MouseButton2 then
-            Features.AimActive = false
-            targetSnapshot = nil
-            targetSnapshotPlayer = nil
-        end
-    end)
-end
-
--- =============================================
--- MOBILE AIM (Hold to Aim mode only)
--- =============================================
-if isMobile then
-    local aimBtn = Instance.new("TextButton")
-    aimBtn.Name = "AimButton"
-    aimBtn.Size = UDim2.new(0, 70, 0, 70)
-    aimBtn.Position = UDim2.new(1, -90, 1, -140)
-    aimBtn.BackgroundColor3 = Color3.fromRGB(0, 170, 255)
-    aimBtn.BackgroundTransparency = 0.3
-    aimBtn.Text = "AIM"
-    aimBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    aimBtn.Font = Enum.Font.GothamBold
-    aimBtn.TextSize = 14
-    aimBtn.Parent = gui
-    NewCorner(aimBtn, 35)
-
-    local aimBtnStroke = Instance.new("UIStroke")
-    aimBtnStroke.Color = Color3.fromRGB(0, 170, 255)
-    aimBtnStroke.Thickness = 2
-    aimBtnStroke.Parent = aimBtn
-
-    Janitor:Connect(aimBtn.InputBegan, function(input)
-        if Features.AimMode == "Hold to Aim" and input.UserInputType == Enum.UserInputType.Touch then
-            Features.AimActive = true
-            SafeTween(aimBtn, {BackgroundTransparency = 0}, 0.1)
-        end
-    end)
-
-    Janitor:Connect(aimBtn.InputEnded, function(input)
-        if Features.AimMode == "Hold to Aim" and input.UserInputType == Enum.UserInputType.Touch then
-            Features.AimActive = false
-            targetSnapshot = nil
-            targetSnapshotPlayer = nil
-            SafeTween(aimBtn, {BackgroundTransparency = 0.3}, 0.1)
-        end
-    end)
-end
-
--- =============================================
 -- WINDOW BUTTONS
 -- =============================================
 local minimized = false
@@ -1066,22 +1002,58 @@ end)
 -- EXIT CLEANUP
 -- =============================================
 Janitor:Connect(exitBtn.MouseButton1Click, function()
+    -- Hide FOV circle immediately
     if FOVCircle then
-        FOVCircle.Visible = false
+        pcall(function() FOVCircle.Visible = false end)
+        pcall(function() FOVCircle:Remove() end)
     end
 
-    Janitor:Cleanup()
-    targetSnapshot = nil
-    targetSnapshotPlayer = nil
-
-    for player, _ in pairs(ESP) do
-        if PlayerHealthConnections[player] then
-            PlayerHealthConnections[player] = nil
+    -- Clear all ESP drawings first
+    for player, data in pairs(ESP) do
+        if data then
+            for _, l in pairs(data.Skeleton) do 
+                if l then 
+                    pcall(function() l.Visible = false end)
+                    pcall(function() l:Remove() end)
+                end 
+            end
+            if data.Tracer then
+                pcall(function() data.Tracer.Visible = false end)
+                pcall(function() data.Tracer:Remove() end)
+            end
+            for _, l in pairs(data.Box) do 
+                if l then 
+                    pcall(function() l.Visible = false end)
+                    pcall(function() l:Remove() end)
+                end 
+            end
+            if data.Line then
+                pcall(function() data.Line.Visible = false end)
+                pcall(function() data.Line:Remove() end)
+            end
         end
     end
-    ESP = {}
 
-    pcall(function() gui:Destroy() end)
+    -- Disconnect all connections
+    Janitor:Cleanup()
+
+    -- Clear all state
+    targetSnapshot = nil
+    targetSnapshotPlayer = nil
+    ESP = {}
+    PlayerHealthConnections = {}
+    PlayerSkeletonParts = {}
+    BoundingBoxCache = {}
+    OcclusionCache = {}
+    table.clear(CachedTargets)
+    table.clear(RenderSnapshots)
+
+    -- Destroy GUI
+    pcall(function() 
+        if gui and gui.Parent then
+            gui:Destroy() 
+        end
+    end)
 end)
 
 -- =============================================
@@ -1416,8 +1388,8 @@ Janitor:Connect(RunService.RenderStepped, function(dt)
         end
     end
 
-    -- FOV Trigger mode: auto-acquire target when enemy enters FOV
-    if Features.AimMode == "FOV Trigger" and Features.AimAssist then
+    -- Auto-acquire target when enemy enters FOV
+    if Features.AimAssist then
         if not targetSnapshot then
             local head, player = GetBestTarget()
             if head and player then
@@ -1482,11 +1454,7 @@ Janitor:Connect(RunService.RenderStepped, function(dt)
         FOVCircle.Radius = Features.AimFOV
         FOVCircle.Color = Features.ESPColor
 
-        if Features.AlwaysShowFOV then
-            FOVCircle.Visible = Features.AimAssist
-        else
-            FOVCircle.Visible = Features.AimAssist and Features.AimActive
-        end
+        FOVCircle.Visible = Features.ShowFOVCircle and Features.AimAssist
     end
 
     -- =============================================
@@ -1495,9 +1463,6 @@ Janitor:Connect(RunService.RenderStepped, function(dt)
     if now - LastESP < ESPThrottle then return end
     LastESP = now
     if not Executor.Drawing then return end
-
-    local myChar = LocalPlayer.Character
-    local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
 
     table.clear(RenderSnapshots)
 
@@ -1586,16 +1551,14 @@ Janitor:Connect(RunService.RenderStepped, function(dt)
             end
         end
 
-        -- TRACER
-        if Features.TracerESP and myRoot then
-            local myPos, myVis = Camera:WorldToViewportPoint(myRoot.Position + Vector3.new(0, 2, 0))
-            if myVis and myPos.Z > 0 then
-                data.Tracer.From = Vector2.new(myPos.X, myPos.Y)
-                data.Tracer.To = Vector2.new(rootPos.X, rootPos.Y)
-                data.Tracer.Color = color
-                data.Tracer.Thickness = ThicknessSettings.Tracer * distScale
-                data.Tracer.Visible = true
-            end
+        -- TRACER (FIXED: Always from bottom center of screen, not from player world pos)
+        if Features.TracerESP then
+            local screenBottom = Camera.ViewportSize.Y
+            data.Tracer.From = Vector2.new(Camera.ViewportSize.X / 2, screenBottom)
+            data.Tracer.To = Vector2.new(rootPos.X, rootPos.Y)
+            data.Tracer.Color = color
+            data.Tracer.Thickness = ThicknessSettings.Tracer * distScale
+            data.Tracer.Visible = true
         end
 
         -- BOX ESP
