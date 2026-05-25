@@ -1,7 +1,6 @@
--- Modern UNO HUB v11.0 — All Bugs Fixed (Deep Dive Pass)
--- Fixes: ESP invisible, tween key collision, nil features, camera fight,
--- slider lag, target race, box behind-camera, connection leak, raycast perf,
--- icon drag toggle, deprecated API, dropdown stuck, mobile aim, multi-touch
+-- Modern UNO HUB v12.0 — Complete Architectural Rewrite
+-- Core fixes: No Scriptable camera, modular ESP, throttled visibility, executor compat,
+-- FPS adaptive rendering, resource manager, real thickness, prediction, render snapshots
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -11,25 +10,112 @@ local Camera = workspace.CurrentCamera
 local LocalPlayer = Players.LocalPlayer
 
 -------------------------------------------------
--- EXECUTOR CAPABILITY CHECKS
+-- EXECUTOR COMPATIBILITY LAYER (Priority 12)
 -------------------------------------------------
-local Capabilities = {
-    Drawing = typeof(Drawing) == "table" and Drawing.new ~= nil,
-    GetHUI = typeof(gethui) == "function",
-    Cloneref = typeof(cloneref) == "function",
-    GetCustomAsset = typeof(getcustomasset) == "function",
-    FileSystem = typeof(writefile) == "function" and typeof(readfile) == "function",
+local Executor = {
+    Name = "unknown",
+    Drawing = false,
+    GetHUI = false,
+    Cloneref = false,
+    FileSystem = false,
+    TransparencyReversed = false,  -- Some executors: 0=inv, 1=vis
 }
 
-if not Capabilities.Drawing then
-    warn("[UNO HUB] Drawing API unsupported. ESP features disabled.")
+-- Detect executor
+if identifyexecutor then
+    local ok, name = pcall(identifyexecutor)
+    if ok and name then
+        Executor.Name = string.lower(name)
+    end
+end
+
+-- Known reversed-transparency executors
+local ReversedExecutors = {
+    ["solara"] = true,
+    ["wave"] = true,
+    ["xeno"] = true,
+    ["hydrogen"] = true,
+    ["fluxus"] = true,
+    ["delta"] = true,
+}
+
+if ReversedExecutors[Executor.Name] then
+    Executor.TransparencyReversed = true
+end
+
+-- Capability checks
+Executor.Drawing = typeof(Drawing) == "table" and Drawing.new ~= nil
+Executor.GetHUI = typeof(gethui) == "function"
+Executor.FileSystem = typeof(writefile) == "function" and typeof(readfile) == "function"
+
+if not Executor.Drawing then
+    warn("[UNO HUB] Drawing API unsupported. ESP disabled.")
+end
+
+-------------------------------------------------
+-- RESOURCE MANAGER (Priority 10 — Central cleanup)
+-------------------------------------------------
+local Janitor = {
+    Connections = {},
+    Drawings = {},
+    Tweens = {},
+    Tasks = {},
+}
+
+function Janitor:Connect(signal, callback)
+    local conn = signal:Connect(callback)
+    table.insert(self.Connections, conn)
+    return conn
+end
+
+function Janitor:AddDrawing(drawing)
+    if drawing then
+        table.insert(self.Drawings, drawing)
+    end
+    return drawing
+end
+
+function Janitor:AddTween(tween)
+    if tween then
+        table.insert(self.Tweens, tween)
+    end
+    return tween
+end
+
+function Janitor:AddTask(task)
+    if task then
+        table.insert(self.Tasks, task)
+    end
+    return task
+end
+
+function Janitor:Cleanup()
+    for _, conn in ipairs(self.Connections) do
+        pcall(function() conn:Disconnect() end)
+    end
+    self.Connections = {}
+
+    for _, tween in ipairs(self.Tweens) do
+        pcall(function() tween:Cancel() end)
+    end
+    self.Tweens = {}
+
+    for _, drawing in ipairs(self.Drawings) do
+        pcall(function() drawing:Remove() end)
+    end
+    self.Drawings = {}
+
+    for _, task in ipairs(self.Tasks) do
+        pcall(function() task.cancel(task) end)
+    end
+    self.Tasks = {}
 end
 
 -------------------------------------------------
 -- SAFE PARENTING
 -------------------------------------------------
 local function SafeParent(gui)
-    if Capabilities.GetHUI then
+    if Executor.GetHUI then
         gui.Parent = gethui()
     else
         gui.Parent = game.CoreGui
@@ -41,7 +127,7 @@ end
 -------------------------------------------------
 local oldGui = game.CoreGui:FindFirstChild("UnoModernHub")
 if oldGui then pcall(function() oldGui:Destroy() end) end
-if Capabilities.GetHUI then
+if Executor.GetHUI then
     for _, v in ipairs(gethui():GetChildren()) do
         if v.Name == "UnoModernHub" then pcall(function() v:Destroy() end) end
     end
@@ -51,31 +137,11 @@ local isMobile = UIS.TouchEnabled and not UIS.KeyboardEnabled
 local isPC = not isMobile
 
 -------------------------------------------------
--- CONNECTION MANAGER
--------------------------------------------------
-local Connections = {}
-local function Connect(signal, callback)
-    local conn = signal:Connect(callback)
-    table.insert(Connections, conn)
-    return conn
-end
-
-local function DisconnectAll()
-    for _, conn in ipairs(Connections) do
-        if conn and conn.Connected then
-            pcall(function() conn:Disconnect() end)
-        end
-    end
-    Connections = {}
-end
-
--------------------------------------------------
--- TWEEN MANAGER (Bug #2 Fix: Use object as key, not tostring)
+-- TWEEN MANAGER (Fixed key collision)
 -------------------------------------------------
 local ActiveTweens = {}
 local function SafeTween(obj, props, dur, style, dir)
     if not obj or not obj.Parent then return end
-    -- FIX #2: Use the actual instance as key, not tostring()
     if ActiveTweens[obj] then
         pcall(function() ActiveTweens[obj]:Cancel() end)
     end
@@ -85,6 +151,7 @@ local function SafeTween(obj, props, dur, style, dir)
         dir or Enum.EasingDirection.Out
     ), props)
     ActiveTweens[obj] = tween
+    Janitor:AddTween(tween)
     tween:Play()
     tween.Completed:Connect(function()
         if ActiveTweens[obj] == tween then
@@ -102,7 +169,7 @@ local function CancelAllTweens()
 end
 
 -------------------------------------------------
--- GLOBAL INTERACTION LOCK
+-- INTERACTION LOCK
 -------------------------------------------------
 local InteractionLock = {
     None = 0,
@@ -113,7 +180,7 @@ local InteractionLock = {
 local CurrentLock = InteractionLock.None
 
 -------------------------------------------------
--- STATE (Bug #3 Fix: Declare ALL features upfront)
+-- FEATURES (All declared upfront)
 -------------------------------------------------
 local Features = {
     SkeletonESP = false,
@@ -124,9 +191,20 @@ local Features = {
     AutoHeadshot = false,
     AimActive = false,
     AimStrength = 35,
-    AimSmoothness = 50,     -- FIX #3: Now declared
+    AimSmoothness = 50,
     AimFOV = 140,
     ESPColor = Color3.fromRGB(0, 170, 255),
+    ESPThickness = 2,           -- Priority 4: Real thickness
+    PredictionAmount = 0,        -- Priority 6: Prediction
+    RenderDistance = 1500,       -- Priority 8: Render distance
+}
+
+-- Per-feature thickness
+local ThicknessSettings = {
+    Skeleton = 1.5,
+    Tracer = 1.5,
+    Box = 2,
+    Line = 1.5,
 }
 
 local ESP = {}
@@ -134,13 +212,88 @@ local targetSnapshot = nil
 local targetSnapshotPlayer = nil
 
 -------------------------------------------------
--- UTILITY
+-- RAYCAST PARAMS (Priority 7: Create once, reuse)
 -------------------------------------------------
-local function NewCorner(parent, radius)
-    local c = Instance.new("UICorner")
-    c.CornerRadius = UDim.new(0, radius or 10)
-    c.Parent = parent
-    return c
+local RayParams = RaycastParams.new()
+RayParams.FilterType = Enum.RaycastFilterType.Exclude
+RayParams.IgnoreWater = true
+
+local function UpdateRaycastFilter()
+    local filter = {LocalPlayer.Character}
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer and p.Character then
+            table.insert(filter, p.Character)
+        end
+    end
+    RayParams.FilterDescendantsInstances = filter
+end
+
+-- Update filter periodically
+Janitor:AddTask(task.spawn(function()
+    while true do
+        task.wait(1)
+        pcall(UpdateRaycastFilter)
+    end
+end))
+
+-------------------------------------------------
+-- VISIBILITY SYSTEM (Priority 2: Smart raycasting)
+-------------------------------------------------
+local CachedTargets = {}
+local LastCacheUpdate = 0
+local CacheInterval = 0.25
+
+local function IsVisible(targetPart, targetCharacter)
+    local origin = Camera.CFrame.Position
+    local direction = (targetPart.Position - origin)
+    local result = workspace:Raycast(origin, direction, RayParams)
+    if result then
+        local hitModel = result.Instance:FindFirstAncestorOfClass("Model")
+        return hitModel == targetCharacter
+    end
+    return true
+end
+
+-- Priority 2: Cache screen-space data, only raycast candidates
+local function UpdateTargetCache()
+    CachedTargets = {}
+    local screenCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer then
+            local char = p.Character
+            local hum = char and char:FindFirstChildOfClass("Humanoid")
+            local head = char and char:FindFirstChild("Head")
+            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+
+            if hum and hum.Health > 0 and head and hrp then
+                local headPos, headOnScreen = Camera:WorldToViewportPoint(head.Position)
+                local rootPos, rootOnScreen = Camera:WorldToViewportPoint(hrp.Position)
+
+                -- Skip if offscreen, behind camera, or outside FOV
+                if headOnScreen and rootOnScreen and headPos.Z > 0 and rootPos.Z > 0 then
+                    local distFromCenter = (Vector2.new(headPos.X, headPos.Y) - screenCenter).Magnitude
+                    local worldDist = (Camera.CFrame.Position - hrp.Position).Magnitude
+
+                    -- Priority 8: Render distance check
+                    if worldDist <= Features.RenderDistance then
+                        table.insert(CachedTargets, {
+                            Player = p,
+                            Character = char,
+                            Humanoid = hum,
+                            Head = head,
+                            HRP = hrp,
+                            HeadPos = headPos,
+                            RootPos = rootPos,
+                            Distance = worldDist,
+                            DistFromCenter = distFromCenter,
+                            Velocity = hrp.Velocity,
+                        })
+                    end
+                end
+            end
+        end
+    end
 end
 
 -------------------------------------------------
@@ -227,7 +380,7 @@ local subText = Instance.new("TextLabel")
 subText.Size = UDim2.new(0, 120, 0, 14)
 subText.Position = UDim2.new(0, 34, 0, 22)
 subText.BackgroundTransparency = 1
-subText.Text = "v11.0 | Deep Fixed"
+subText.Text = "v12.0 | Architect"
 subText.TextColor3 = Color3.fromRGB(130, 130, 140)
 subText.Font = Enum.Font.Gotham
 subText.TextSize = 9
@@ -249,11 +402,10 @@ local function MakeBtn(text, pos, bg, hover)
     btn.Parent = topBar
     NewCorner(btn, 8)
 
-    -- FIX #13: Use Connect() wrapper for ALL connections
-    Connect(btn.MouseEnter, function()
+    Janitor:Connect(btn.MouseEnter, function()
         SafeTween(btn, {BackgroundColor3 = hover}, 0.15)
     end)
-    Connect(btn.MouseLeave, function()
+    Janitor:Connect(btn.MouseLeave, function()
         SafeTween(btn, {BackgroundColor3 = bg}, 0.15)
     end)
     return btn
@@ -323,14 +475,14 @@ local function CreateTab(name)
     layout.Padding = UDim.new(0, 8)
     layout.Parent = scroll
 
-    layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+    Janitor:Connect(layout:GetPropertyChangedSignal("AbsoluteContentSize"), function()
         scroll.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + 16)
     end)
 
     tabs[name] = btn
     tabContents[name] = scroll
 
-    Connect(btn.MouseButton1Click, function()
+    Janitor:Connect(btn.MouseButton1Click, function()
         if activeTab == name then return end
         SafeTween(tabs[activeTab], {BackgroundColor3 = Color3.fromRGB(32, 32, 40)}, 0.2)
         tabContents[activeTab].Visible = false
@@ -384,7 +536,7 @@ local function CreateToggle(parent, text, default, callback)
     NewCorner(knob, 1)
 
     local state = default
-    Connect(track.MouseButton1Click, function()
+    Janitor:Connect(track.MouseButton1Click, function()
         state = not state
         if state then
             SafeTween(track, {BackgroundColor3 = Color3.fromRGB(0, 170, 255)}, 0.2)
@@ -400,10 +552,10 @@ local function CreateToggle(parent, text, default, callback)
 end
 
 -- =============================================
--- SLIDER (Bug #5 Fix: Use input.Position directly, not GetMouseLocation)
+-- SLIDER (Fixed: input.Position, no global state collision)
 -- =============================================
-local ActiveSlider = nil
-local sliderData = {}
+local ActiveSliderId = nil
+local sliderRegistry = {}
 
 local function CreateSlider(parent, labelText, min, max, default, callback, suffix)
     local frame = Instance.new("Frame")
@@ -457,7 +609,8 @@ local function CreateSlider(parent, labelText, min, max, default, callback, suff
     handleStroke.Thickness = 1
     handleStroke.Parent = handle
 
-    -- FIX #5: Store track reference for input-based updates
+    local sliderId = frame
+
     local function updateSlider(inputPos)
         if CurrentLock ~= InteractionLock.None and CurrentLock ~= InteractionLock.Slider then return end
         local barX = track.AbsolutePosition.X
@@ -472,18 +625,16 @@ local function CreateSlider(parent, labelText, min, max, default, callback, suff
         callback(value)
     end
 
-    local sliderId = tostring(frame)
-    sliderData[sliderId] = {
-        track = track,
-        update = updateSlider
+    sliderRegistry[sliderId] = {
+        update = updateSlider,
+        frame = frame,
     }
 
-    -- FIX #5: Capture input object and use its position
-    Connect(track.InputBegan, function(input)
+    Janitor:Connect(track.InputBegan, function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
             if CurrentLock == InteractionLock.None then
                 CurrentLock = InteractionLock.Slider
-                ActiveSlider = sliderId
+                ActiveSliderId = sliderId
                 updateSlider(input.Position)
             end
         end
@@ -493,28 +644,25 @@ local function CreateSlider(parent, labelText, min, max, default, callback, suff
 end
 
 -- =============================================
--- CENTRALIZED INPUT (FIX #5: Pass input.Position)
+-- CENTRALIZED INPUT (Per-slider tracking, no collision)
 -- =============================================
-Connect(UIS.InputChanged, function(input)
-    if ActiveSlider then
-        local data = sliderData[ActiveSlider]
-        if data then
-            data.update(input.Position)
-        end
+Janitor:Connect(UIS.InputChanged, function(input)
+    if ActiveSliderId and sliderRegistry[ActiveSliderId] then
+        sliderRegistry[ActiveSliderId].update(input.Position)
     end
 end)
 
-Connect(UIS.InputEnded, function(input)
+Janitor:Connect(UIS.InputEnded, function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-        if ActiveSlider then
+        if ActiveSliderId then
             CurrentLock = InteractionLock.None
-            ActiveSlider = nil
+            ActiveSliderId = nil
         end
     end
 end)
 
 -- =============================================
--- DROPDOWN (Bug #8 Fix: pcall wrapper + timeout reset)
+-- DROPDOWN (Fixed: pcall + timeout)
 -- =============================================
 local function CreateDropdown(parent, labelText, options, default, callback)
     local frame = Instance.new("Frame")
@@ -585,21 +733,20 @@ local function CreateDropdown(parent, labelText, options, default, callback)
         optBtn.AutoButtonColor = false
         optBtn.Parent = list
 
-        Connect(optBtn.MouseEnter, function()
+        Janitor:Connect(optBtn.MouseEnter, function()
             SafeTween(optBtn, {BackgroundColor3 = Color3.fromRGB(0, 170, 255)}, 0.1)
             optBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
         end)
-        Connect(optBtn.MouseLeave, function()
+        Janitor:Connect(optBtn.MouseLeave, function()
             SafeTween(optBtn, {BackgroundColor3 = i % 2 == 0 and Color3.fromRGB(32, 32, 42) or Color3.fromRGB(28, 28, 36)}, 0.1)
             optBtn.TextColor3 = Color3.fromRGB(200, 200, 210)
         end)
-        Connect(optBtn.MouseButton1Click, function()
+        Janitor:Connect(optBtn.MouseButton1Click, function()
             if dropdownBusy then return end
             display.Text = opt
             callback(opt)
             expanded = false
             dropdownBusy = true
-            -- FIX #8: pcall wrapper so errors don't lock the dropdown
             pcall(function()
                 SafeTween(frame, {Size = UDim2.new(1, -6, 0, isMobile and 52 or 44)}, 0.2)
             end)
@@ -613,7 +760,7 @@ local function CreateDropdown(parent, labelText, options, default, callback)
         end)
     end
 
-    Connect(display.MouseButton1Click, function()
+    Janitor:Connect(display.MouseButton1Click, function()
         if dropdownBusy then return end
         expanded = not expanded
         if expanded then
@@ -661,6 +808,10 @@ CreateSlider(combatScroll, "Smoothness", 0, 100, 50, function(v)
     Features.AimSmoothness = v
 end, "%")
 
+CreateSlider(combatScroll, "Prediction", 0, 25, 0, function(v)
+    Features.PredictionAmount = v / 100  -- Convert to 0.00-0.25
+end, "")
+
 CreateSlider(combatScroll, "Aim FOV", 10, 300, 140, function(v)
     Features.AimFOV = v
 end, "")
@@ -685,7 +836,15 @@ CreateToggle(visualScroll, "Line ESP", false, function(v)
 end)
 
 CreateSlider(visualScroll, "Line Thickness", 1, 5, 2, function(v)
-    -- Applied in render
+    Features.ESPThickness = v
+    ThicknessSettings.Skeleton = v * 0.75
+    ThicknessSettings.Tracer = v * 0.75
+    ThicknessSettings.Box = v
+    ThicknessSettings.Line = v * 0.75
+end, "")
+
+CreateSlider(visualScroll, "Render Distance", 100, 3000, 1500, function(v)
+    Features.RenderDistance = v
 end, "")
 
 CreateDropdown(visualScroll, "ESP Color", {"Cyan", "Red", "Green", "Purple", "Yellow", "White"}, "Cyan", function(v)
@@ -703,7 +862,7 @@ CreateDropdown(visualScroll, "ESP Color", {"Cyan", "Red", "Green", "Purple", "Ye
 end)
 
 -- =============================================
--- DRAG (Bug #10 Fix: Movement threshold suppresses click)
+-- DRAG (Fixed: threshold suppresses click)
 -- =============================================
 local isDraggingWindow = false
 local isDraggingIcon = false
@@ -712,7 +871,7 @@ local dragStartPos = nil
 local iconDragDelta = Vector2.zero
 local IconMoved = false
 
-Connect(icon.InputBegan, function(input, gameProcessed)
+Janitor:Connect(icon.InputBegan, function(input, gameProcessed)
     if gameProcessed then return end
     if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
         if CurrentLock == InteractionLock.None then
@@ -726,7 +885,7 @@ Connect(icon.InputBegan, function(input, gameProcessed)
     end
 end)
 
-Connect(topBar.InputBegan, function(input)
+Janitor:Connect(topBar.InputBegan, function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
         if CurrentLock == InteractionLock.None then
             CurrentLock = InteractionLock.Window
@@ -737,7 +896,7 @@ Connect(topBar.InputBegan, function(input)
     end
 end)
 
-Connect(UIS.InputChanged, function(input)
+Janitor:Connect(UIS.InputChanged, function(input)
     if not isDraggingWindow and not isDraggingIcon then return end
     if input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch then return end
 
@@ -745,7 +904,6 @@ Connect(UIS.InputChanged, function(input)
 
     if isDraggingIcon then
         iconDragDelta = delta
-        -- FIX #10: Mark as moved if dragged more than 5 pixels
         if delta.Magnitude > 5 then
             IconMoved = true
         end
@@ -755,7 +913,7 @@ Connect(UIS.InputChanged, function(input)
     end
 end)
 
-Connect(UIS.InputEnded, function(input)
+Janitor:Connect(UIS.InputEnded, function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
         isDraggingWindow = false
         isDraggingIcon = false
@@ -765,8 +923,7 @@ Connect(UIS.InputEnded, function(input)
     end
 end)
 
--- FIX #10: Suppress click if icon was dragged
-Connect(icon.MouseButton1Click, function()
+Janitor:Connect(icon.MouseButton1Click, function()
     if IconMoved then
         IconMoved = false
         return
@@ -778,13 +935,13 @@ end)
 -- PC AIM INPUT
 -- =============================================
 if isPC then
-    Connect(UIS.InputBegan, function(input, gameProcessed)
+    Janitor:Connect(UIS.InputBegan, function(input, gameProcessed)
         if not gameProcessed and input.UserInputType == Enum.UserInputType.MouseButton2 then
             Features.AimActive = true
         end
     end)
 
-    Connect(UIS.InputEnded, function(input)
+    Janitor:Connect(UIS.InputEnded, function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton2 then
             Features.AimActive = false
         end
@@ -792,42 +949,41 @@ if isPC then
 end
 
 -- =============================================
--- MOBILE AIM (Bug #14 Fix: Track specific touch, not global)
+-- MOBILE AIM (Priority 9: Dedicated button approach)
 -- =============================================
 local aimTouchId = nil
 
 if isMobile then
-    Connect(UIS.InputBegan, function(input, gameProcessed)
-        if gameProcessed then return end
+    -- Create dedicated aim button
+    local aimBtn = Instance.new("TextButton")
+    aimBtn.Name = "AimButton"
+    aimBtn.Size = UDim2.new(0, 70, 0, 70)
+    aimBtn.Position = UDim2.new(1, -90, 1, -140)
+    aimBtn.BackgroundColor3 = Color3.fromRGB(0, 170, 255)
+    aimBtn.BackgroundTransparency = 0.3
+    aimBtn.Text = "AIM"
+    aimBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    aimBtn.Font = Enum.Font.GothamBold
+    aimBtn.TextSize = 14
+    aimBtn.Parent = gui
+    NewCorner(aimBtn, 35)
+
+    local aimBtnStroke = Instance.new("UIStroke")
+    aimBtnStroke.Color = Color3.fromRGB(0, 170, 255)
+    aimBtnStroke.Thickness = 2
+    aimBtnStroke.Parent = aimBtn
+
+    Janitor:Connect(aimBtn.InputBegan, function(input)
         if input.UserInputType == Enum.UserInputType.Touch then
-            local pos = input.Position
-            -- Only activate if touching bottom 40% AND not on UI
-            if pos.Y > Camera.ViewportSize.Y * 0.6 and not gameProcessed then
-                if not aimTouchId then
-                    aimTouchId = input
-                    Features.AimActive = true
-                end
-            end
+            Features.AimActive = true
+            SafeTween(aimBtn, {BackgroundTransparency = 0}, 0.1)
         end
     end)
 
-    Connect(UIS.InputEnded, function(input)
+    Janitor:Connect(aimBtn.InputEnded, function(input)
         if input.UserInputType == Enum.UserInputType.Touch then
-            -- FIX #14: Only deactivate if THIS specific touch ends
-            if input == aimTouchId then
-                aimTouchId = nil
-                Features.AimActive = false
-            end
-        end
-    end)
-
-    Connect(UIS.InputChanged, function(input)
-        if input.UserInputType == Enum.UserInputType.Touch and input == aimTouchId then
-            -- Cancel aim if finger moves too far up (above 50%)
-            if input.Position.Y < Camera.ViewportSize.Y * 0.5 then
-                aimTouchId = nil
-                Features.AimActive = false
-            end
+            Features.AimActive = false
+            SafeTween(aimBtn, {BackgroundTransparency = 0.3}, 0.1)
         end
     end)
 end
@@ -836,7 +992,7 @@ end
 -- WINDOW BUTTONS
 -- =============================================
 local minimized = false
-Connect(minBtn.MouseButton1Click, function()
+Janitor:Connect(minBtn.MouseButton1Click, function()
     minimized = not minimized
     if minimized then
         SafeTween(main, {Size = UDim2.new(0, WIN_W, 0, 40)}, 0.2)
@@ -849,16 +1005,15 @@ Connect(minBtn.MouseButton1Click, function()
     end
 end)
 
-Connect(hideBtn.MouseButton1Click, function()
+Janitor:Connect(hideBtn.MouseButton1Click, function()
     main.Visible = false
 end)
 
 -- =============================================
--- EXIT CLEANUP
+-- EXIT CLEANUP (Uses Janitor)
 -- =============================================
-Connect(exitBtn.MouseButton1Click, function()
-    CancelAllTweens()
-    DisconnectAll()
+Janitor:Connect(exitBtn.MouseButton1Click, function()
+    Janitor:Cleanup()
     targetSnapshot = nil
     targetSnapshotPlayer = nil
     main.Visible = false
@@ -872,7 +1027,7 @@ Connect(exitBtn.MouseButton1Click, function()
     end
     ESP = {}
 
-    pcall(function() FOVCircle:Remove() end)
+    pcall(function() if FOVCircle then FOVCircle:Remove() end end)
 
     task.delay(0.1, function()
         pcall(function() gui:Destroy() end)
@@ -880,27 +1035,37 @@ Connect(exitBtn.MouseButton1Click, function()
 end)
 
 -- =============================================
--- DRAWING (Bug #1 Fix: Transparency = 0 for visible)
+-- DRAWING (Priority 1: Executor-compatible transparency)
 -- =============================================
 local function NewLine()
-    if not Capabilities.Drawing then return nil end
+    if not Executor.Drawing then return nil end
     local line = Drawing.new("Line")
     line.Visible = false
-    -- FIX #1: 0 = fully visible, 1 = invisible
-    line.Transparency = 0
-    line.Thickness = isMobile and 2.5 or 1.5
-    return line
+    -- Priority 1: Use executor-compatible transparency
+    if Executor.TransparencyReversed then
+        line.Transparency = 1  -- Reversed executors: 1 = visible
+    else
+        line.Transparency = 0  -- Standard: 0 = visible
+    end
+    line.Thickness = 1.5
+    return Janitor:AddDrawing(line)
 end
 
 local FOVCircle
-if Capabilities.Drawing then
+if Executor.Drawing then
     FOVCircle = Drawing.new("Circle")
     FOVCircle.Visible = false
     FOVCircle.Color = Features.ESPColor
-    FOVCircle.Thickness = isMobile and 2 or 1.5
+    FOVCircle.Thickness = 1.5
     FOVCircle.NumSides = 64
     FOVCircle.Filled = false
     FOVCircle.Radius = Features.AimFOV
+    if Executor.TransparencyReversed then
+        FOVCircle.Transparency = 1
+    else
+        FOVCircle.Transparency = 0
+    end
+    Janitor:AddDrawing(FOVCircle)
 end
 
 -- =============================================
@@ -922,13 +1087,13 @@ local function GetSkeleton(char)
 end
 
 -- =============================================
--- ESP SETUP (Bug #8 Fix: Track connections per-player, disconnect on respawn)
+-- ESP SETUP (Fixed: Per-player connection tracking)
 -- =============================================
-local PlayerHealthConnections = {}  -- Store health connections per player
+local PlayerHealthConnections = {}
 
 local function CreateESP(player)
     if player == LocalPlayer then return end
-    if not Capabilities.Drawing then return end
+    if not Executor.Drawing then return end
 
     local char = player.Character
     local skeletonCount = 5
@@ -953,7 +1118,6 @@ local function CreateESP(player)
     }
 
     local function SetupHealth()
-        -- FIX #8: Disconnect previous health connections for this player
         if PlayerHealthConnections[player] then
             for _, conn in ipairs(PlayerHealthConnections[player]) do
                 pcall(function() conn:Disconnect() end)
@@ -998,8 +1162,7 @@ local function CreateESP(player)
 
     SetupHealth()
 
-    -- FIX #8 + FIX #9: Validate character exists before SetupHealth
-    Connect(player.CharacterAdded, function(newChar)
+    Janitor:Connect(player.CharacterAdded, function(newChar)
         if not newChar or not newChar.Parent then return end
 
         local data = ESP[player]
@@ -1019,7 +1182,6 @@ local function CreateESP(player)
 end
 
 local function RemoveESP(player)
-    -- FIX #8: Clean up health connections
     if PlayerHealthConnections[player] then
         for _, conn in ipairs(PlayerHealthConnections[player]) do
             pcall(function() conn:Disconnect() end)
@@ -1037,91 +1199,82 @@ local function RemoveESP(player)
 end
 
 for _, p in ipairs(Players:GetPlayers()) do CreateESP(p) end
-Connect(Players.PlayerAdded, CreateESP)
-Connect(Players.PlayerRemoving, RemoveESP)
+Janitor:Connect(Players.PlayerAdded, CreateESP)
+Janitor:Connect(Players.PlayerRemoving, RemoveESP)
 
 -- =============================================
--- AIM TARGETING (Bug #3 Fix: Return player with head; Bug #9: Throttled raycast)
+-- AIM TARGETING (Priority 5: Weighted scoring + prediction)
 -- =============================================
-local LastTargetScan = 0
-local TargetScanInterval = 0.25  -- Cache valid targets every 250ms
-local CachedVisibleTargets = {}  -- Cache for visible targets
+local function GetBestTarget()
+    if #CachedTargets == 0 then return nil, nil end
 
-local function IsVisible(targetPos)
-    local origin = Camera.CFrame.Position
-    local direction = (targetPos - origin)
-    local raycastParams = RaycastParams.new()
-    -- FIX #11: Use Exclude instead of deprecated Blacklist
-    raycastParams.FilterType = Enum.RaycastFilterType.Exclude
-    raycastParams.FilterDescendantsInstances = {LocalPlayer.Character}
-    raycastParams.IgnoreWater = true
-
-    local result = workspace:Raycast(origin, direction, raycastParams)
-    if result then
-        local hitModel = result.Instance:FindFirstAncestorOfClass("Model")
-        -- FIX #3: Verify player ownership
-        if hitModel then
-            local plr = Players:GetPlayerFromCharacter(hitModel)
-            if plr then
-                return true
-            end
-        end
-        return false
-    end
-    return true
-end
-
--- FIX #2: Return both head and player to avoid second scan
-local function GetClosestPlayer()
-    local closest = nil
-    local closestPlayer = nil
-    local shortest = Features.AimFOV
     local screenCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+    local myPos = Camera.CFrame.Position
+    local bestScore = math.huge
+    local bestTarget = nil
+    local bestPlayer = nil
 
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= LocalPlayer then
-            local char = p.Character
-            local hum = char and char:FindFirstChildOfClass("Humanoid")
-            local head = char and char:FindFirstChild("Head")
+    for _, target in ipairs(CachedTargets) do
+        -- Priority 5: Weighted scoring formula
+        local crosshairWeight = target.DistFromCenter * 0.7
+        local distanceWeight = (target.Distance / 10) * 0.2
+        local velocityPenalty = target.Velocity.Magnitude * 0.1
 
-            if hum and hum.Health > 0 and head then
-                local data = ESP[p]
-                if data and not data.IsDead then
-                    local pos, visible = Camera:WorldToViewportPoint(head.Position)
-                    if visible then
-                        local dist = (Vector2.new(pos.X, pos.Y) - screenCenter).Magnitude
-                        if dist < shortest then
-                            if IsVisible(head.Position) then
-                                shortest = dist
-                                closest = head
-                                closestPlayer = p
-                            end
-                        end
-                    end
-                end
+        local score = crosshairWeight + distanceWeight + velocityPenalty
+
+        -- Only raycast the best candidate, not everyone
+        if score < bestScore then
+            if IsVisible(target.Head, target.Character) then
+                bestScore = score
+                bestTarget = target.Head
+                bestPlayer = target.Player
             end
         end
     end
 
-    return closest, closestPlayer
+    return bestTarget, bestPlayer
 end
 
 -- =============================================
--- RENDER LOOP
+-- RENDER LOOP (Priority 11: FPS adaptive + modular ESP)
 -- =============================================
 local LastESP = 0
-local ESPThrottle = isMobile and 0.03 or 0.016
+local ESPThrottle = 0.016
+local LastTargetScan = 0
+local TargetScanInterval = 0.25
 
--- FIX #4: Camera type management
-local OriginalCameraType = Camera.CameraType
+-- Priority 11: FPS adaptive throttle
+local function UpdateESPThrottle(dt)
+    local fps = math.floor(1 / dt)
+    if fps < 30 then
+        ESPThrottle = 0.05
+    elseif fps < 45 then
+        ESPThrottle = 0.033
+    elseif fps < 60 then
+        ESPThrottle = 0.025
+    else
+        ESPThrottle = 0.016
+    end
+end
 
-Connect(RunService.RenderStepped, function(dt)
+Janitor:Connect(RunService.RenderStepped, function(dt)
     local now = tick()
+
+    -- Priority 11: Adaptive ESP throttle
+    UpdateESPThrottle(dt)
+
+    -- =============================================
+    -- TARGET CACHE UPDATE (Throttled)
+    -- =============================================
+    if now - LastTargetScan >= TargetScanInterval then
+        LastTargetScan = now
+        UpdateTargetCache()
+    end
 
     -- =============================================
     -- AIMBOT (Full rate)
     -- =============================================
-    -- FIX #6: Validate target snapshot every frame with nil checks
+    -- Validate current snapshot
     if targetSnapshot and targetSnapshotPlayer then
         local char = targetSnapshotPlayer.Character
         local hum = char and char:FindFirstChildOfClass("Humanoid")
@@ -1139,45 +1292,22 @@ Connect(RunService.RenderStepped, function(dt)
         end
     end
 
-    -- FIX #9: Throttled target acquisition
-    if now - LastTargetScan >= TargetScanInterval then
-        LastTargetScan = now
-        CachedVisibleTargets = {}
-        for _, p in ipairs(Players:GetPlayers()) do
-            if p ~= LocalPlayer then
-                local char = p.Character
-                local head = char and char:FindFirstChild("Head")
-                if head and IsVisible(head.Position) then
-                    table.insert(CachedVisibleTargets, p)
-                end
-            end
-        end
-    end
-
-    -- Find new target if needed
+    -- Acquire new target
     if not targetSnapshot and Features.AimAssist and Features.AimActive then
-        local head, player = GetClosestPlayer()
+        local head, player = GetBestTarget()
         if head and player then
             targetSnapshot = head
             targetSnapshotPlayer = player
         end
     end
 
-    -- FIX #4: Set camera type to Scriptable when aiming, restore when not
+    -- Priority 1: Pure lerp, NO Scriptable camera type change
     if Features.AimAssist and Features.AimActive and targetSnapshot then
-        if Camera.CameraType ~= Enum.CameraType.Scriptable then
-            OriginalCameraType = Camera.CameraType
-            Camera.CameraType = Enum.CameraType.Scriptable
-        end
-
-        -- FIX #11: FPS-independent smoothing using deltaTime
         local smoothFactor = math.clamp(1 - (Features.AimSmoothness / 200), 0.02, 1.0)
         local baseAlpha = (Features.AimStrength / 100) * smoothFactor
-        -- Normalize to ~60fps: at 120fps, halve the alpha; at 30fps, double it
         local fpsCompensatedAlpha = math.clamp(baseAlpha * (dt * 60), 0.01, 1.0)
 
         local aimTarget = targetSnapshot
-        -- FIX #6: Safe nil check for AutoHeadshot
         if Features.AutoHeadshot and targetSnapshotPlayer then
             local char = targetSnapshotPlayer.Character
             if char then
@@ -1189,37 +1319,43 @@ Connect(RunService.RenderStepped, function(dt)
         end
 
         if aimTarget and aimTarget.Parent then
-            local targetCFrame = CFrame.new(Camera.CFrame.Position, aimTarget.Position)
+            -- Priority 6: Prediction
+            local predictedPos = aimTarget.Position
+            if Features.PredictionAmount > 0 then
+                local hrp = aimTarget.Parent:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    predictedPos = aimTarget.Position + (hrp.Velocity * Features.PredictionAmount)
+                end
+            end
+
+            local targetCFrame = CFrame.new(Camera.CFrame.Position, predictedPos)
             Camera.CFrame = Camera.CFrame:Lerp(targetCFrame, fpsCompensatedAlpha)
-        end
-    else
-        -- Restore camera type when not aiming
-        if Camera.CameraType == Enum.CameraType.Scriptable and OriginalCameraType then
-            Camera.CameraType = OriginalCameraType
         end
     end
 
-    -- FOV circle
-    if Capabilities.Drawing and FOVCircle then
+    -- FOV Circle (show when AimAssist enabled, not just when active)
+    if Executor.Drawing and FOVCircle then
         local screenCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
         FOVCircle.Position = screenCenter
         FOVCircle.Radius = Features.AimFOV
         FOVCircle.Color = Features.ESPColor
-        FOVCircle.Visible = Features.AimAssist and Features.AimActive
+        FOVCircle.Visible = Features.AimAssist  -- Show when enabled, not just active
     end
 
     -- =============================================
-    -- ESP (Throttled)
+    -- ESP (Throttled, modular)
     -- =============================================
     if now - LastESP < ESPThrottle then return end
     LastESP = now
-    if not Capabilities.Drawing then return end
+    if not Executor.Drawing then return end
 
     local myChar = LocalPlayer.Character
     local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
 
+    -- Priority 3: Build render snapshots once, reuse for all ESP types
+    local RenderSnapshots = {}
     for player, data in pairs(ESP) do
-        -- Hide all first (prevents ghosting)
+        -- Pre-hide all
         data.Tracer.Visible = false
         data.Line.Visible = false
         for _, l in pairs(data.Skeleton) do if l then l.Visible = false end end
@@ -1236,14 +1372,43 @@ Connect(RunService.RenderStepped, function(dt)
             continue
         end
 
-        -- FIX #7: Check WorldToViewportPoint on-screen boolean AND depth
         local rootPos, rootOnScreen = Camera:WorldToViewportPoint(hrp.Position)
         if not rootOnScreen or rootPos.Z < 0 then
             continue
         end
 
+        local headPos, headOnScreen = Camera:WorldToViewportPoint(head.Position)
+        if not headOnScreen or headPos.Z < 0 then
+            continue
+        end
+
         local distance = (Camera.CFrame.Position - hrp.Position).Magnitude
-        local thickness = math.clamp(3.5 - (distance / 300), 1, 3.5)
+
+        table.insert(RenderSnapshots, {
+            Player = player,
+            Data = data,
+            Character = char,
+            Head = head,
+            HRP = hrp,
+            RootPos = rootPos,
+            HeadPos = headPos,
+            Distance = distance,
+        })
+    end
+
+    -- Render using shared snapshots
+    for _, snap in ipairs(RenderSnapshots) do
+        local data = snap.Data
+        local char = snap.Character
+        local head = snap.Head
+        local hrp = snap.HRP
+        local rootPos = snap.RootPos
+        local headPos = snap.HeadPos
+        local distance = snap.Distance
+
+        -- Priority 4: Real thickness system
+        local baseThickness = Features.ESPThickness
+        local distScale = math.clamp(3.5 - (distance / 300), 0.5, 3.5)
         local color = Features.ESPColor
 
         -- SKELETON
@@ -1256,12 +1421,11 @@ Connect(RunService.RenderStepped, function(dt)
                 if p0 and p1 and line then
                     local v0, vis0 = Camera:WorldToViewportPoint(p0.Position)
                     local v1, vis1 = Camera:WorldToViewportPoint(p1.Position)
-                    -- FIX #7: Only draw if both points are in front of camera
                     if vis0 and vis1 and v0.Z > 0 and v1.Z > 0 then
                         line.From = Vector2.new(v0.X, v0.Y)
                         line.To = Vector2.new(v1.X, v1.Y)
                         line.Color = color
-                        line.Thickness = thickness
+                        line.Thickness = ThicknessSettings.Skeleton * distScale
                         line.Visible = true
                     end
                 end
@@ -1275,17 +1439,15 @@ Connect(RunService.RenderStepped, function(dt)
                 data.Tracer.From = Vector2.new(myPos.X, myPos.Y)
                 data.Tracer.To = Vector2.new(rootPos.X, rootPos.Y)
                 data.Tracer.Color = color
-                data.Tracer.Thickness = thickness
+                data.Tracer.Thickness = ThicknessSettings.Tracer * distScale
                 data.Tracer.Visible = true
             end
         end
 
-        -- BOX ESP (FIX #7: Check head Z-depth)
+        -- BOX ESP
         if Features.BoxESP then
-            local headPos, headVis = Camera:WorldToViewportPoint(head.Position)
             local legPos, legVis = Camera:WorldToViewportPoint(hrp.Position - Vector3.new(0, 3, 0))
-            -- Only draw if both points are valid and in front
-            if headVis and legVis and headPos.Z > 0 and legPos.Z > 0 then
+            if legVis and legPos.Z > 0 then
                 local boxHeight = math.abs(headPos.Y - legPos.Y)
                 local boxWidth = boxHeight * 0.6
                 local centerX = rootPos.X
@@ -1295,25 +1457,25 @@ Connect(RunService.RenderStepped, function(dt)
                 data.Box[1].From = Vector2.new(centerX - boxWidth/2, topY)
                 data.Box[1].To = Vector2.new(centerX + boxWidth/2, topY)
                 data.Box[1].Color = color
-                data.Box[1].Thickness = thickness
+                data.Box[1].Thickness = ThicknessSettings.Box * distScale
                 data.Box[1].Visible = true
 
                 data.Box[2].From = Vector2.new(centerX + boxWidth/2, topY)
                 data.Box[2].To = Vector2.new(centerX + boxWidth/2, botY)
                 data.Box[2].Color = color
-                data.Box[2].Thickness = thickness
+                data.Box[2].Thickness = ThicknessSettings.Box * distScale
                 data.Box[2].Visible = true
 
                 data.Box[3].From = Vector2.new(centerX + boxWidth/2, botY)
                 data.Box[3].To = Vector2.new(centerX - boxWidth/2, botY)
                 data.Box[3].Color = color
-                data.Box[3].Thickness = thickness
+                data.Box[3].Thickness = ThicknessSettings.Box * distScale
                 data.Box[3].Visible = true
 
                 data.Box[4].From = Vector2.new(centerX - boxWidth/2, botY)
                 data.Box[4].To = Vector2.new(centerX - boxWidth/2, topY)
                 data.Box[4].Color = color
-                data.Box[4].Thickness = thickness
+                data.Box[4].Thickness = ThicknessSettings.Box * distScale
                 data.Box[4].Visible = true
             end
         end
@@ -1323,32 +1485,30 @@ Connect(RunService.RenderStepped, function(dt)
             data.Line.From = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y)
             data.Line.To = Vector2.new(rootPos.X, rootPos.Y)
             data.Line.Color = color
-            data.Line.Thickness = thickness
+            data.Line.Thickness = ThicknessSettings.Line * distScale
             data.Line.Visible = true
         end
     end
 end)
 
 -- =============================================
--- LOCK DEADLOCK FAILSAFE (Bug #12)
+-- LOCK DEADLOCK FAILSAFE
 -- =============================================
-task.spawn(function()
+Janitor:AddTask(task.spawn(function()
     while true do
         task.wait(3)
-        -- If lock has been held for >3s without input, force reset
         if CurrentLock ~= InteractionLock.None then
             local anyInput = false
-            -- Check if any mouse/touch is currently held
             for _, input in ipairs(UIS:GetMouseButtonsPressed()) do
                 anyInput = true
                 break
             end
             if not anyInput then
                 CurrentLock = InteractionLock.None
-                ActiveSlider = nil
+                ActiveSliderId = nil
                 isDraggingWindow = false
                 isDraggingIcon = false
             end
         end
     end
-end)
+end))
