@@ -1,7 +1,7 @@
--- Modern UNO HUB v16.0 — High-Priority Engineering Fixes
--- Fixes: GetBoundingBox order, tween completion tracking, bounding box cache,
--- skeleton part cache, multi-pass transparent raycast, smoothed FPS, adaptive FOV sides,
--- occlusion cache, ms prediction UI
+-- Modern UNO HUB v17.0 — FOV Trigger Aimbot, Auto Headshot Fix, ESP Stability
+-- Fixes: FOV-based trigger mode, auto headshot locking, FOV circle resize,
+-- ESP consistency, bounding box cache invalidation, skeleton cache sync,
+-- smoothness inversion, aim strength uncapped, dead player cleanup
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -114,7 +114,7 @@ local isMobile = UIS.TouchEnabled and not UIS.KeyboardEnabled
 local isPC = not isMobile
 
 -------------------------------------------------
--- TWEEN MANAGER (FIX #1: Proper completion tracking)
+-- TWEEN MANAGER
 -------------------------------------------------
 local ActiveTweens = {}
 local TweenCompletions = {}
@@ -136,7 +136,6 @@ local function SafeTween(obj, props, dur, style, dir)
     ActiveTweens[obj] = tween
     Janitor:AddTween(tween)
 
-    -- FIX #1: Store completion connection directly, not via Janitor:Connect
     local completionConn = tween.Completed:Connect(function()
         if ActiveTweens[obj] == tween then
             ActiveTweens[obj] = nil
@@ -146,7 +145,7 @@ local function SafeTween(obj, props, dur, style, dir)
         end
     end)
     TweenCompletions[obj] = completionConn
-    table.insert(Janitor.Connections, completionConn)  -- Track for cleanup
+    table.insert(Janitor.Connections, completionConn)
 
     tween:Play()
     return tween
@@ -173,13 +172,14 @@ local Features = {
     LineESP = false,
     AimAssist = false,
     AutoHeadshot = false,
-    AimActive = false,
-    AimStrength = 35,
-    AimSmoothness = 50,
+    AimActive = false,           -- Computed: true when target in FOV + visible
+    AimMode = "FOV Trigger",     -- "FOV Trigger" or "Hold to Aim"
+    AimStrength = 100,           -- Default 100% for instant snap feel
+    AimSmoothness = 0,           -- Default 0% for instant snap feel
     AimFOV = 140,
     ESPColor = Color3.fromRGB(0, 170, 255),
     ESPThickness = 2,
-    PredictionMs = 0,           -- FIX #10: Store as milliseconds
+    PredictionMs = 0,
     RenderDistance = 1500,
     TeamCheck = false,
     AlwaysShowFOV = true,
@@ -208,11 +208,13 @@ Janitor:Connect(LocalPlayer.CharacterAdded, function(char)
     RayParams.FilterDescendantsInstances = {char}
 end)
 
--- FIX #5: Multi-pass transparent reraycast (up to 5 attempts)
+-- Multi-pass transparent reraycast (up to 5 attempts)
 local function IsVisible(targetPart, targetCharacter)
+    if not targetPart or not targetPart.Parent then return false end
     local origin = Camera.CFrame.Position
     local direction = (targetPart.Position - origin)
     local maxDistance = direction.Magnitude
+    if maxDistance <= 0 then return true end
     direction = direction.Unit * maxDistance
 
     local currentOrigin = origin
@@ -221,33 +223,33 @@ local function IsVisible(targetPart, targetCharacter)
     for _ = 1, 5 do
         local result = workspace:Raycast(currentOrigin, direction.Unit * remainingDist, RayParams)
         if not result then
-            return true  -- Nothing blocking
+            return true
         end
 
         if result.Instance:IsDescendantOf(targetCharacter) then
-            return true  -- Hit the target
+            return true
         end
 
         if result.Instance.Transparency > 0.95 then
-            -- Transparent part — advance past it and reraycast
             currentOrigin = result.Position + direction.Unit * 0.1
             remainingDist = maxDistance - (currentOrigin - origin).Magnitude
             if remainingDist <= 0 then
                 return true
             end
         else
-            return false  -- Opaque obstacle
+            return false
         end
     end
 
-    return false  -- Max iterations reached, assume blocked
+    return false
 end
 
--- FIX #12: Occlusion cache
+-- Occlusion cache
 local OcclusionCache = {}
-local OcclusionCacheTime = 0.05  -- Cache visibility for 50ms
+local OcclusionCacheTime = 0.05
 
 local function IsVisibleCached(targetPart, targetCharacter)
+    if not targetPart or not targetPart.Parent then return false end
     local cacheKey = tostring(targetPart)
     local now = tick()
     local cached = OcclusionCache[cacheKey]
@@ -275,7 +277,7 @@ local function NewCorner(parent, radius)
 end
 
 -------------------------------------------------
--- VISIBILITY SYSTEM (FIX #2: table.clear reuse)
+-- VISIBILITY SYSTEM
 -------------------------------------------------
 local CachedTargets = {}
 
@@ -336,7 +338,7 @@ gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 SafeParent(gui)
 
 local WIN_W = isMobile and 340 or 400
-local WIN_H = isMobile and 260 or 300
+local WIN_H = isMobile and 300 or 340
 
 local main = Instance.new("Frame")
 main.Size = UDim2.new(0, WIN_W, 0, WIN_H)
@@ -410,7 +412,7 @@ local subText = Instance.new("TextLabel")
 subText.Size = UDim2.new(0, 120, 0, 14)
 subText.Position = UDim2.new(0, 34, 0, 22)
 subText.BackgroundTransparency = 1
-subText.Text = "v16.0 | Engineered"
+subText.Text = "v17.0 | FOV Trigger"
 subText.TextColor3 = Color3.fromRGB(130, 130, 140)
 subText.Font = Enum.Font.Gotham
 subText.TextSize = 9
@@ -645,6 +647,7 @@ local function CreateSlider(parent, labelText, min, max, default, callback, suff
         if CurrentLock ~= InteractionLock.None and CurrentLock ~= InteractionLock.Slider then return end
         local barX = track.AbsolutePosition.X
         local barW = track.AbsoluteSize.X
+        if barW <= 0 then return end
         local newPct = math.clamp((inputPos.X - barX) / barW, 0, 1)
         local value = math.round(min + (newPct * (max - min)))
 
@@ -830,15 +833,22 @@ CreateToggle(combatScroll, "Auto Headshot", false, function(v)
     Features.AutoHeadshot = v
 end)
 
-CreateSlider(combatScroll, "Aim Strength", 0, 100, 35, function(v)
+CreateDropdown(combatScroll, "Aim Mode", {"FOV Trigger", "Hold to Aim"}, "FOV Trigger", function(v)
+    Features.AimMode = v
+    -- Reset aim state when switching modes
+    Features.AimActive = false
+    targetSnapshot = nil
+    targetSnapshotPlayer = nil
+end)
+
+CreateSlider(combatScroll, "Aim Strength", 0, 100, 100, function(v)
     Features.AimStrength = v
 end, "%")
 
-CreateSlider(combatScroll, "Smoothness", 0, 100, 50, function(v)
+CreateSlider(combatScroll, "Smoothness", 0, 100, 0, function(v)
     Features.AimSmoothness = v
 end, "%")
 
--- FIX #10: Prediction in milliseconds (0-250ms)
 CreateSlider(combatScroll, "Prediction", 0, 250, 0, function(v)
     Features.PredictionMs = v
 end, "ms")
@@ -898,6 +908,9 @@ CreateDropdown(visualScroll, "ESP Color", {"Cyan", "Red", "Green", "Purple", "Ye
     Features.ESPColor = colors[v] or colors.Cyan
     iconStroke.Color = Features.ESPColor
     titleIcon.ImageColor3 = Features.ESPColor
+    if FOVCircle then
+        FOVCircle.Color = Features.ESPColor
+    end
 end)
 
 -- =============================================
@@ -971,24 +984,26 @@ Janitor:Connect(icon.MouseButton1Click, function()
 end)
 
 -- =============================================
--- PC AIM INPUT
+-- PC AIM INPUT (Hold to Aim mode only)
 -- =============================================
 if isPC then
     Janitor:Connect(UIS.InputBegan, function(input, gameProcessed)
-        if not gameProcessed and input.UserInputType == Enum.UserInputType.MouseButton2 then
+        if Features.AimMode == "Hold to Aim" and not gameProcessed and input.UserInputType == Enum.UserInputType.MouseButton2 then
             Features.AimActive = true
         end
     end)
 
     Janitor:Connect(UIS.InputEnded, function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton2 then
+        if Features.AimMode == "Hold to Aim" and input.UserInputType == Enum.UserInputType.MouseButton2 then
             Features.AimActive = false
+            targetSnapshot = nil
+            targetSnapshotPlayer = nil
         end
     end)
 end
 
 -- =============================================
--- MOBILE AIM
+-- MOBILE AIM (Hold to Aim mode only)
 -- =============================================
 if isMobile then
     local aimBtn = Instance.new("TextButton")
@@ -1010,15 +1025,17 @@ if isMobile then
     aimBtnStroke.Parent = aimBtn
 
     Janitor:Connect(aimBtn.InputBegan, function(input)
-        if input.UserInputType == Enum.UserInputType.Touch then
+        if Features.AimMode == "Hold to Aim" and input.UserInputType == Enum.UserInputType.Touch then
             Features.AimActive = true
             SafeTween(aimBtn, {BackgroundTransparency = 0}, 0.1)
         end
     end)
 
     Janitor:Connect(aimBtn.InputEnded, function(input)
-        if input.UserInputType == Enum.UserInputType.Touch then
+        if Features.AimMode == "Hold to Aim" and input.UserInputType == Enum.UserInputType.Touch then
             Features.AimActive = false
+            targetSnapshot = nil
+            targetSnapshotPlayer = nil
             SafeTween(aimBtn, {BackgroundTransparency = 0.3}, 0.1)
         end
     end)
@@ -1085,8 +1102,7 @@ if Executor.Drawing then
     FOVCircle.Visible = false
     FOVCircle.Color = Features.ESPColor
     FOVCircle.Thickness = 1.5
-    -- FIX #7: Adaptive sides based on FOV radius
-    FOVCircle.NumSides = Features.AimFOV < 80 and 32 or (Features.AimFOV < 160 and 48 or 64)
+    FOVCircle.NumSides = 64
     FOVCircle.Filled = false
     FOVCircle.Radius = Features.AimFOV
     FOVCircle.Transparency = 1
@@ -1112,10 +1128,10 @@ local function GetSkeleton(char)
 end
 
 -- =============================================
--- ESP SETUP (FIX #4: Cache skeleton parts on CharacterAdded)
+-- ESP SETUP
 -- =============================================
 local PlayerHealthConnections = {}
-local PlayerSkeletonParts = {}  -- FIX #4: Cache skeleton part references
+local PlayerSkeletonParts = {}
 
 local function CreateESP(player)
     if player == LocalPlayer then return end
@@ -1143,7 +1159,6 @@ local function CreateESP(player)
         SkeletonCount = skeletonCount,
     }
 
-    -- FIX #4: Cache skeleton parts
     local function CacheSkeletonParts(char)
         if not char then return end
         local parts = {}
@@ -1207,6 +1222,9 @@ local function CreateESP(player)
     Janitor:Connect(player.CharacterAdded, function(newChar)
         if not newChar or not newChar.Parent then return end
 
+        -- Clear bounding box cache on respawn
+        BoundingBoxCache[player] = nil
+
         local data = ESP[player]
         if data then
             data.IsDead = false
@@ -1222,7 +1240,6 @@ local function CreateESP(player)
             end
         end
 
-        -- FIX #4: Re-cache parts for new rig
         CacheSkeletonParts(newChar)
 
         task.delay(0.5, function()
@@ -1238,7 +1255,8 @@ local function RemoveESP(player)
         end
         PlayerHealthConnections[player] = nil
     end
-    PlayerSkeletonParts[player] = nil  -- FIX #4: Clear cached parts
+    PlayerSkeletonParts[player] = nil
+    BoundingBoxCache[player] = nil
 
     local data = ESP[player]
     if not data then return end
@@ -1302,11 +1320,10 @@ local TargetScanInterval = 0.25
 
 local RenderSnapshots = {}
 
--- FIX #5: Smoothed FPS tracking
 local SmoothedFPS = 60
 
 local function UpdateESPThrottle(dt)
-    local instantFPS = 1 / dt
+    local instantFPS = dt > 0 and (1 / dt) or 60
     SmoothedFPS = SmoothedFPS * 0.9 + instantFPS * 0.1
 
     if SmoothedFPS < 30 then
@@ -1320,7 +1337,7 @@ local function UpdateESPThrottle(dt)
     end
 end
 
--- FIX #3: Bounding box cache
+-- Bounding box cache
 local BoundingBoxCache = {}
 local BoundingBoxCacheInterval = 0.2
 local LastBoundingBoxUpdate = 0
@@ -1330,6 +1347,10 @@ local function UpdateBoundingBoxCache(now)
     LastBoundingBoxUpdate = now
 
     for player, data in pairs(ESP) do
+        if data.IsDead then
+            BoundingBoxCache[player] = nil
+            continue
+        end
         local char = player.Character
         if char then
             local success, cf, size = pcall(function()
@@ -1341,7 +1362,11 @@ local function UpdateBoundingBoxCache(now)
                     Size = size,
                     Time = now,
                 }
+            else
+                BoundingBoxCache[player] = nil
             end
+        else
+            BoundingBoxCache[player] = nil
         end
     end
 end
@@ -1359,17 +1384,18 @@ Janitor:Connect(RunService.RenderStepped, function(dt)
         UpdateTargetCache()
     end
 
-    -- FIX #3: Update bounding box cache
+    -- Update bounding box cache
     UpdateBoundingBoxCache(now)
 
-    -- FIX #7: Update FOV circle sides if radius changed
+    -- Update FOV circle
     if FOVCircle then
         FOVCircle.NumSides = Features.AimFOV < 80 and 32 or (Features.AimFOV < 160 and 48 or 64)
     end
 
     -- =============================================
-    -- AIMBOT
+    -- AIMBOT STATE MANAGEMENT
     -- =============================================
+    -- Validate current target
     if targetSnapshot and targetSnapshotPlayer then
         local char = targetSnapshotPlayer.Character
         local hum = char and char:FindFirstChildOfClass("Humanoid")
@@ -1390,25 +1416,43 @@ Janitor:Connect(RunService.RenderStepped, function(dt)
         end
     end
 
-    if not targetSnapshot and Features.AimAssist and Features.AimActive then
-        local head, player = GetBestTarget()
-        if head and player then
-            targetSnapshot = head
-            targetSnapshotPlayer = player
+    -- FOV Trigger mode: auto-acquire target when enemy enters FOV
+    if Features.AimMode == "FOV Trigger" and Features.AimAssist then
+        if not targetSnapshot then
+            local head, player = GetBestTarget()
+            if head and player then
+                targetSnapshot = head
+                targetSnapshotPlayer = player
+                Features.AimActive = true
+            else
+                Features.AimActive = false
+            end
+        else
+            -- Keep AimActive true as long as we have a valid target
+            Features.AimActive = true
         end
     end
 
+    -- =============================================
+    -- AIM EXECUTION
+    -- =============================================
     if Features.AimAssist and Features.AimActive and targetSnapshot then
-        local smoothFactor = math.clamp(1 - (Features.AimSmoothness / 200), 0.02, 1.0)
-        local baseAlpha = (Features.AimStrength / 100) * smoothFactor
-        local fpsCompensatedAlpha = math.clamp(baseAlpha * (dt * 60), 0.01, 1.0)
+        -- FIX: Smoothness is now correct — 0% = instant, 100% = very smooth
+        -- Strength controls how much of the delta we apply per frame
+        local strengthFactor = Features.AimStrength / 100
+        local smoothFactor = math.clamp(1 - (Features.AimSmoothness / 100), 0.001, 1.0)
 
+        -- Combined alpha: strength * smoothness, with FPS compensation
+        local baseAlpha = strengthFactor * smoothFactor
+        local fpsCompensatedAlpha = math.clamp(baseAlpha * (dt * 60), 0.001, 1.0)
+
+        -- Auto Headshot: always aim at head position
         local aimTarget = targetSnapshot
         if Features.AutoHeadshot and targetSnapshotPlayer then
             local char = targetSnapshotPlayer.Character
             if char then
                 local head = char:FindFirstChild("Head")
-                if head then
+                if head and head.Parent then
                     aimTarget = head
                 end
             end
@@ -1419,7 +1463,6 @@ Janitor:Connect(RunService.RenderStepped, function(dt)
             if Features.PredictionMs > 0 then
                 local hrp = aimTarget.Parent:FindFirstChild("HumanoidRootPart")
                 if hrp then
-                    -- FIX #10: Prediction in milliseconds (converted to seconds)
                     local vel = hrp.AssemblyLinearVelocity or hrp.Velocity or Vector3.zero
                     predictedPos = aimTarget.Position + (vel * (Features.PredictionMs / 1000))
                 end
@@ -1430,12 +1473,15 @@ Janitor:Connect(RunService.RenderStepped, function(dt)
         end
     end
 
-    -- FOV Circle
+    -- =============================================
+    -- FOV CIRCLE VISIBILITY
+    -- =============================================
     if Executor.Drawing and FOVCircle then
         local screenCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
         FOVCircle.Position = screenCenter
         FOVCircle.Radius = Features.AimFOV
         FOVCircle.Color = Features.ESPColor
+
         if Features.AlwaysShowFOV then
             FOVCircle.Visible = Features.AimAssist
         else
@@ -1444,7 +1490,7 @@ Janitor:Connect(RunService.RenderStepped, function(dt)
     end
 
     -- =============================================
-    -- ESP (Throttled, modular)
+    -- ESP (Throttled)
     -- =============================================
     if now - LastESP < ESPThrottle then return end
     LastESP = now
@@ -1517,7 +1563,7 @@ Janitor:Connect(RunService.RenderStepped, function(dt)
         local distScale = math.clamp(3.5 - (distance / 300), 0.5, 3.5)
         local color = Features.ESPColor
 
-        -- SKELETON (FIX #4: Use cached parts)
+        -- SKELETON
         if Features.SkeletonESP then
             local cachedParts = PlayerSkeletonParts[snap.Player]
             if cachedParts then
@@ -1525,7 +1571,6 @@ Janitor:Connect(RunService.RenderStepped, function(dt)
                     local p0 = parts[1]
                     local p1 = parts[2]
                     local line = data.Skeleton[i]
-                    -- Validate cached parts still exist
                     if p0 and p0.Parent and p1 and p1.Parent and line then
                         local v0, vis0 = Camera:WorldToViewportPoint(p0.Position)
                         local v1, vis1 = Camera:WorldToViewportPoint(p1.Position)
@@ -1553,7 +1598,7 @@ Janitor:Connect(RunService.RenderStepped, function(dt)
             end
         end
 
-        -- BOX ESP (FIX #3: Use cached bounding box)
+        -- BOX ESP
         if Features.BoxESP then
             local boxCache = BoundingBoxCache[snap.Player]
             if boxCache and boxCache.CFrame and boxCache.Size then
