@@ -1,7 +1,5 @@
--- Modern UNO HUB v16.0 — High-Priority Engineering Fixes
--- Fixes: GetBoundingBox order, tween completion tracking, bounding box cache,
--- skeleton part cache, multi-pass transparent raycast, smoothed FPS, adaptive FOV sides,
--- occlusion cache, ms prediction UI
+-- Modern UNO HUB v18.0 — Engine Architecture
+-- Centralized EntityState, precomputed math, drawing state diffing, dynamic scan
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -114,7 +112,7 @@ local isMobile = UIS.TouchEnabled and not UIS.KeyboardEnabled
 local isPC = not isMobile
 
 -------------------------------------------------
--- TWEEN MANAGER (FIX #1: Proper completion tracking)
+-- TWEEN MANAGER (FIX #1: Closure-safe completion)
 -------------------------------------------------
 local ActiveTweens = {}
 local TweenCompletions = {}
@@ -136,17 +134,21 @@ local function SafeTween(obj, props, dur, style, dir)
     ActiveTweens[obj] = tween
     Janitor:AddTween(tween)
 
-    -- FIX #1: Store completion connection directly, not via Janitor:Connect
     local completionConn
     completionConn = tween.Completed:Connect(function()
         if ActiveTweens[obj] == tween then
             ActiveTweens[obj] = nil
         end
-
         if TweenCompletions[obj] == completionConn then
             TweenCompletions[obj] = nil
         end
     end)
+    TweenCompletions[obj] = completionConn
+    table.insert(Janitor.Connections, completionConn)
+
+    tween:Play()
+    return tween
+end
 
 -------------------------------------------------
 -- INTERACTION LOCK
@@ -175,7 +177,7 @@ local Features = {
     AimFOV = 140,
     ESPColor = Color3.fromRGB(0, 170, 255),
     ESPThickness = 2,
-    PredictionMs = 0,           -- FIX #10: Store as milliseconds
+    PredictionMs = 0,
     RenderDistance = 1500,
     TeamCheck = false,
     AlwaysShowFOV = true,
@@ -187,10 +189,6 @@ local ThicknessSettings = {
     Box = 2,
     Line = 1.5,
 }
-
-local ESP = {}
-local targetSnapshot = nil
-local targetSnapshotPlayer = nil
 
 -------------------------------------------------
 -- RAYCAST PARAMS
@@ -204,7 +202,7 @@ Janitor:Connect(LocalPlayer.CharacterAdded, function(char)
     RayParams.FilterDescendantsInstances = {char}
 end)
 
--- FIX #5: Multi-pass transparent reraycast (up to 5 attempts)
+-- Multi-pass transparent reraycast (up to 5 attempts)
 local function IsVisible(targetPart, targetCharacter)
     local origin = Camera.CFrame.Position
     local direction = (targetPart.Position - origin)
@@ -217,38 +215,46 @@ local function IsVisible(targetPart, targetCharacter)
     for _ = 1, 5 do
         local result = workspace:Raycast(currentOrigin, direction.Unit * remainingDist, RayParams)
         if not result then
-            return true  -- Nothing blocking
+            return true
         end
 
         if result.Instance:IsDescendantOf(targetCharacter) then
-            return true  -- Hit the target
+            return true
         end
 
         if result.Instance.Transparency > 0.95 then
-            -- Transparent part — advance past it and reraycast
             currentOrigin = result.Position + direction.Unit * 0.1
             remainingDist = maxDistance - (currentOrigin - origin).Magnitude
             if remainingDist <= 0 then
                 return true
             end
         else
-            return false  -- Opaque obstacle
+            return false
         end
     end
 
-    return false  -- Max iterations reached, assume blocked
+    return false
 end
 
--- FIX #12: Occlusion cache
+-------------------------------------------------
+-- VISIBILITY CACHE (FIX #4: Compound key, cleanup)
+-------------------------------------------------
 local OcclusionCache = {}
-local OcclusionCacheTime = 0.05  -- Cache visibility for 50ms
+local OcclusionCacheTime = 0.05
+local AimbotOcclusionTime = 0.015
+local LastOcclusionCleanup = 0
 
-local function IsVisibleCached(targetPart, targetCharacter)
-    local cacheKey = tostring(targetPart)
+local function GetCacheKey(part, character)
+    return tostring(part) .. "_" .. tostring(character)
+end
+
+local function IsVisibleCached(targetPart, targetCharacter, forAimbot)
+    local cacheKey = GetCacheKey(targetPart, targetCharacter)
     local now = tick()
+    local cacheDuration = forAimbot and AimbotOcclusionTime or OcclusionCacheTime
     local cached = OcclusionCache[cacheKey]
 
-    if cached and (now - cached.Time) < OcclusionCacheTime then
+    if cached and (now - cached.Time) < cacheDuration then
         return cached.Result
     end
 
@@ -260,6 +266,16 @@ local function IsVisibleCached(targetPart, targetCharacter)
     return result
 end
 
+local function CleanupOcclusionCache(now)
+    if now - LastOcclusionCleanup < 1 then return end
+    LastOcclusionCleanup = now
+    for key, entry in pairs(OcclusionCache) do
+        if now - entry.Time > 1 then
+            OcclusionCache[key] = nil
+        end
+    end
+end
+
 -------------------------------------------------
 -- UTILITY
 -------------------------------------------------
@@ -268,58 +284,6 @@ local function NewCorner(parent, radius)
     c.CornerRadius = UDim.new(0, radius or 10)
     c.Parent = parent
     return c
-end
-
--------------------------------------------------
--- VISIBILITY SYSTEM (FIX #2: table.clear reuse)
--------------------------------------------------
-local CachedTargets = {}
-
-local function UpdateTargetCache()
-    table.clear(CachedTargets)
-    local screenCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
-
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= LocalPlayer then
-            if Features.TeamCheck then
-                local myTeam = LocalPlayer.Team
-                local theirTeam = p.Team
-                if myTeam ~= nil and theirTeam ~= nil and theirTeam == myTeam then
-                    continue
-                end
-            end
-
-            local char = p.Character
-            local hum = char and char:FindFirstChildOfClass("Humanoid")
-            local head = char and char:FindFirstChild("Head")
-            local hrp = char and char:FindFirstChild("HumanoidRootPart")
-
-            if hum and hum.Health > 0 and head and hrp then
-                local headPos, headOnScreen = Camera:WorldToViewportPoint(head.Position)
-                local rootPos, rootOnScreen = Camera:WorldToViewportPoint(hrp.Position)
-
-                if headOnScreen and rootOnScreen and headPos.Z > 0 and rootPos.Z > 0 then
-                    local distFromCenter = (Vector2.new(headPos.X, headPos.Y) - screenCenter).Magnitude
-                    local worldDist = (Camera.CFrame.Position - hrp.Position).Magnitude
-
-                    if distFromCenter <= Features.AimFOV and worldDist <= Features.RenderDistance then
-                        table.insert(CachedTargets, {
-                            Player = p,
-                            Character = char,
-                            Humanoid = hum,
-                            Head = head,
-                            HRP = hrp,
-                            HeadPos = headPos,
-                            RootPos = rootPos,
-                            Distance = worldDist,
-                            DistFromCenter = distFromCenter,
-                            Velocity = hrp.AssemblyLinearVelocity or hrp.Velocity or Vector3.zero,
-                        })
-                    end
-                end
-            end
-        end
-    end
 end
 
 -------------------------------------------------
@@ -349,7 +313,6 @@ mainStroke.Color = Color3.fromRGB(45, 45, 55)
 mainStroke.Thickness = 1.5
 mainStroke.Parent = main
 
--- Home Icon
 local iconSize = isMobile and 44 or 36
 local icon = Instance.new("ImageButton")
 icon.Size = UDim2.new(0, iconSize, 0, iconSize)
@@ -368,7 +331,6 @@ iconStroke.Color = Features.ESPColor
 iconStroke.Thickness = 2
 iconStroke.Parent = icon
 
--- Top Bar
 local topBar = Instance.new("Frame")
 topBar.Size = UDim2.new(1, 0, 0, 40)
 topBar.BackgroundColor3 = Color3.fromRGB(22, 22, 26)
@@ -406,14 +368,13 @@ local subText = Instance.new("TextLabel")
 subText.Size = UDim2.new(0, 120, 0, 14)
 subText.Position = UDim2.new(0, 34, 0, 22)
 subText.BackgroundTransparency = 1
-subText.Text = "v16.0 | Engineered"
+subText.Text = "v18.0 | Engine"
 subText.TextColor3 = Color3.fromRGB(130, 130, 140)
 subText.Font = Enum.Font.Gotham
 subText.TextSize = 9
 subText.TextXAlignment = Enum.TextXAlignment.Left
 subText.Parent = topBar
 
--- Buttons
 local btnSize = isMobile and 32 or 26
 local function MakeBtn(text, pos, bg, hover)
     local btn = Instance.new("TextButton")
@@ -441,7 +402,6 @@ local minBtn = MakeBtn("−", UDim2.new(1, -90, 0, 6), Color3.fromRGB(45,45,55),
 local hideBtn = MakeBtn("○", UDim2.new(1, -58, 0, 6), Color3.fromRGB(45,45,55), Color3.fromRGB(65,65,80))
 local exitBtn = MakeBtn("×", UDim2.new(1, -26, 0, 6), Color3.fromRGB(210,55,55), Color3.fromRGB(255,75,75))
 
--- Tab Bar
 local tabBar = Instance.new("Frame")
 tabBar.Size = UDim2.new(1, -12, 0, 32)
 tabBar.Position = UDim2.new(0, 6, 0, 44)
@@ -457,7 +417,6 @@ tabList.HorizontalAlignment = Enum.HorizontalAlignment.Center
 tabList.VerticalAlignment = Enum.VerticalAlignment.Center
 tabList.Parent = tabBar
 
--- Content Area
 local contentArea = Instance.new("Frame")
 contentArea.Size = UDim2.new(1, -12, 1, -82)
 contentArea.Position = UDim2.new(0, 6, 0, 80)
@@ -524,7 +483,7 @@ local combatScroll = CreateTab("Combat")
 local visualScroll = CreateTab("Visual")
 
 -- =============================================
--- TOGGLE
+-- TOGGLE / SLIDER / DROPDOWN (unchanged UI code)
 -- =============================================
 local function CreateToggle(parent, text, default, callback)
     local frame = Instance.new("Frame")
@@ -577,9 +536,6 @@ local function CreateToggle(parent, text, default, callback)
     return frame
 end
 
--- =============================================
--- SLIDER
--- =============================================
 local ActiveSliderId = nil
 local sliderRegistry = {}
 
@@ -669,9 +625,6 @@ local function CreateSlider(parent, labelText, min, max, default, callback, suff
     return frame
 end
 
--- =============================================
--- CENTRALIZED INPUT
--- =============================================
 Janitor:Connect(UIS.InputChanged, function(input)
     if ActiveSliderId and sliderRegistry[ActiveSliderId] then
         sliderRegistry[ActiveSliderId].update(input.Position)
@@ -687,9 +640,6 @@ Janitor:Connect(UIS.InputEnded, function(input)
     end
 end)
 
--- =============================================
--- DROPDOWN
--- =============================================
 local function CreateDropdown(parent, labelText, options, default, callback)
     local frame = Instance.new("Frame")
     frame.Size = UDim2.new(1, -6, 0, isMobile and 52 or 44)
@@ -811,15 +761,10 @@ local function CreateDropdown(parent, labelText, options, default, callback)
 end
 
 -- =============================================
--- POPULATE COMBAT TAB
+-- POPULATE TABS
 -- =============================================
 CreateToggle(combatScroll, "Aim Assist", false, function(v)
     Features.AimAssist = v
-    if not v then
-        Features.AimActive = false
-        targetSnapshot = nil
-        targetSnapshotPlayer = nil
-    end
 end)
 
 CreateToggle(combatScroll, "Auto Headshot", false, function(v)
@@ -834,7 +779,6 @@ CreateSlider(combatScroll, "Smoothness", 0, 100, 50, function(v)
     Features.AimSmoothness = v
 end, "%")
 
--- FIX #10: Prediction in milliseconds (0-250ms)
 CreateSlider(combatScroll, "Prediction", 0, 250, 0, function(v)
     Features.PredictionMs = v
 end, "ms")
@@ -843,9 +787,6 @@ CreateSlider(combatScroll, "Aim FOV", 10, 300, 140, function(v)
     Features.AimFOV = v
 end, "")
 
--- =============================================
--- POPULATE VISUAL TAB
--- =============================================
 CreateToggle(visualScroll, "Skeleton ESP", false, function(v)
     Features.SkeletonESP = v
 end)
@@ -897,7 +838,7 @@ CreateDropdown(visualScroll, "ESP Color", {"Cyan", "Red", "Green", "Purple", "Ye
 end)
 
 -- =============================================
--- DRAG
+-- DRAG / INPUT (unchanged)
 -- =============================================
 local isDraggingWindow = false
 local isDraggingIcon = false
@@ -966,16 +907,12 @@ Janitor:Connect(icon.MouseButton1Click, function()
     main.Visible = not main.Visible
 end)
 
--- =============================================
--- PC AIM INPUT
--- =============================================
 if isPC then
     Janitor:Connect(UIS.InputBegan, function(input, gameProcessed)
         if not gameProcessed and input.UserInputType == Enum.UserInputType.MouseButton2 then
             Features.AimActive = true
         end
     end)
-
     Janitor:Connect(UIS.InputEnded, function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton2 then
             Features.AimActive = false
@@ -983,9 +920,6 @@ if isPC then
     end)
 end
 
--- =============================================
--- MOBILE AIM
--- =============================================
 if isMobile then
     local aimBtn = Instance.new("TextButton")
     aimBtn.Name = "AimButton"
@@ -1011,7 +945,6 @@ if isMobile then
             SafeTween(aimBtn, {BackgroundTransparency = 0}, 0.1)
         end
     end)
-
     Janitor:Connect(aimBtn.InputEnded, function(input)
         if input.UserInputType == Enum.UserInputType.Touch then
             Features.AimActive = false
@@ -1020,9 +953,6 @@ if isMobile then
     end)
 end
 
--- =============================================
--- WINDOW BUTTONS
--- =============================================
 local minimized = false
 Janitor:Connect(minBtn.MouseButton1Click, function()
     minimized = not minimized
@@ -1041,25 +971,14 @@ Janitor:Connect(hideBtn.MouseButton1Click, function()
     main.Visible = false
 end)
 
--- =============================================
--- EXIT CLEANUP
--- =============================================
 Janitor:Connect(exitBtn.MouseButton1Click, function()
     if FOVCircle then
         FOVCircle.Visible = false
     end
-
     Janitor:Cleanup()
     targetSnapshot = nil
     targetSnapshotPlayer = nil
-
-    for player, _ in pairs(ESP) do
-        if PlayerHealthConnections[player] then
-            PlayerHealthConnections[player] = nil
-        end
-    end
-    ESP = {}
-
+    EntityState = {}
     pcall(function() gui:Destroy() end)
 end)
 
@@ -1081,7 +1000,6 @@ if Executor.Drawing then
     FOVCircle.Visible = false
     FOVCircle.Color = Features.ESPColor
     FOVCircle.Thickness = 1.5
-    -- FIX #7: Adaptive sides based on FOV radius
     FOVCircle.NumSides = Features.AimFOV < 80 and 32 or (Features.AimFOV < 160 and 48 or 64)
     FOVCircle.Filled = false
     FOVCircle.Radius = Features.AimFOV
@@ -1090,7 +1008,7 @@ if Executor.Drawing then
 end
 
 -- =============================================
--- SKELETON
+-- SKELETON DEFINITIONS
 -- =============================================
 local R15Skeleton = {
     {"Head","UpperTorso"},{"UpperTorso","LowerTorso"},{"UpperTorso","LeftUpperArm"},{"LeftUpperArm","LeftLowerArm"},{"LeftLowerArm","LeftHand"},
@@ -1108,10 +1026,48 @@ local function GetSkeleton(char)
 end
 
 -- =============================================
--- ESP SETUP (FIX #4: Cache skeleton parts on CharacterAdded)
+-- DRAWING STATE DIFFING (FIX #10: Only update if changed)
+-- =============================================
+local DrawingState = {}
+
+local function SetLineState(line, from, to, color, thickness, visible)
+    if not line then return end
+    local state = DrawingState[line]
+    if not state then
+        state = {From = nil, To = nil, Color = nil, Thickness = nil, Visible = nil}
+        DrawingState[line] = state
+    end
+
+    if state.Visible ~= visible then
+        line.Visible = visible
+        state.Visible = visible
+    end
+    if not visible then return end
+
+    if state.From ~= from then
+        line.From = from
+        state.From = from
+    end
+    if state.To ~= to then
+        line.To = to
+        state.To = to
+    end
+    if state.Color ~= color then
+        line.Color = color
+        state.Color = color
+    end
+    if state.Thickness ~= thickness then
+        line.Thickness = thickness
+        state.Thickness = thickness
+    end
+end
+
+-- =============================================
+-- ESP SETUP
 -- =============================================
 local PlayerHealthConnections = {}
-local PlayerSkeletonParts = {}  -- FIX #4: Cache skeleton part references
+local PlayerSkeletonParts = {}
+local BoundingBoxCache = {}
 
 local function CreateESP(player)
     if player == LocalPlayer then return end
@@ -1137,9 +1093,9 @@ local function CreateESP(player)
         Line = NewLine(),
         IsDead = false,
         SkeletonCount = skeletonCount,
+        LastSkeletonValidation = 0,
     }
 
-    -- FIX #4: Cache skeleton parts
     local function CacheSkeletonParts(char)
         if not char then return end
         local parts = {}
@@ -1147,9 +1103,12 @@ local function CreateESP(player)
         for _, bones in ipairs(connections) do
             local p0 = char:FindFirstChild(bones[1])
             local p1 = char:FindFirstChild(bones[2])
-            table.insert(parts, {p0, p1})
+            table.insert(parts, {p0, p1, bones[1], bones[2]})
         end
         PlayerSkeletonParts[player] = parts
+        if ESP[player] then
+            ESP[player].LastSkeletonValidation = tick()
+        end
     end
 
     local function SetupHealth(expectedChar)
@@ -1170,13 +1129,7 @@ local function CreateESP(player)
         local healthConn = hum:GetPropertyChangedSignal("Health"):Connect(function()
             if hum.Health <= 0 then
                 local data = ESP[player]
-                if data then
-                    data.IsDead = true
-                    data.Tracer.Visible = false
-                    data.Line.Visible = false
-                    for _, l in pairs(data.Skeleton) do if l then l.Visible = false end end
-                    for _, l in pairs(data.Box) do if l then l.Visible = false end end
-                end
+                if data then data.IsDead = true end
             else
                 local data = ESP[player]
                 if data then data.IsDead = false end
@@ -1186,13 +1139,7 @@ local function CreateESP(player)
 
         local diedConn = hum.Died:Connect(function()
             local data = ESP[player]
-            if data then
-                data.IsDead = true
-                data.Tracer.Visible = false
-                data.Line.Visible = false
-                for _, l in pairs(data.Skeleton) do if l then l.Visible = false end end
-                for _, l in pairs(data.Box) do if l then l.Visible = false end end
-            end
+            if data then data.IsDead = true end
         end)
         table.insert(PlayerHealthConnections[player], diedConn)
     end
@@ -1218,9 +1165,7 @@ local function CreateESP(player)
             end
         end
 
-        -- FIX #4: Re-cache parts for new rig
         CacheSkeletonParts(newChar)
-
         task.delay(0.5, function()
             SetupHealth(newChar)
         end)
@@ -1234,7 +1179,8 @@ local function RemoveESP(player)
         end
         PlayerHealthConnections[player] = nil
     end
-    PlayerSkeletonParts[player] = nil  -- FIX #4: Clear cached parts
+    PlayerSkeletonParts[player] = nil
+    BoundingBoxCache[player] = nil
 
     local data = ESP[player]
     if not data then return end
@@ -1250,8 +1196,102 @@ Janitor:Connect(Players.PlayerAdded, CreateESP)
 Janitor:Connect(Players.PlayerRemoving, RemoveESP)
 
 -- =============================================
--- AIM TARGETING
+-- CENTRALIZED ENTITY STATE (FIX #3: The Engine Core)
 -- =============================================
+local EntityState = {}
+local CachedTargets = {}
+
+-- Precomputed BoxESP offsets (FIX #2: No more CFrame.new allocations)
+local BoxOffsets = {
+    Vector3.new(0.5, 0.5, 0.5),
+    Vector3.new(-0.5, 0.5, 0.5),
+    Vector3.new(0.5, 0.5, -0.5),
+    Vector3.new(-0.5, 0.5, -0.5),
+    Vector3.new(0.5, -0.5, 0.5),
+    Vector3.new(-0.5, -0.5, 0.5),
+    Vector3.new(0.5, -0.5, -0.5),
+    Vector3.new(-0.5, -0.5, -0.5),
+}
+
+-- Reusable tables to avoid allocations
+local ReusableCorners = {}
+for i = 1, 8 do
+    ReusableCorners[i] = Vector2.zero
+end
+
+local function UpdateEntityState()
+    table.clear(EntityState)
+    table.clear(CachedTargets)
+
+    local screenCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+    local cameraPos = Camera.CFrame.Position
+
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p == LocalPlayer then continue end
+
+        if Features.TeamCheck then
+            local myTeam = LocalPlayer.Team
+            local theirTeam = p.Team
+            if myTeam ~= nil and theirTeam ~= nil and theirTeam == myTeam then
+                continue
+            end
+        end
+
+        local char = p.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        local head = char and char:FindFirstChild("Head")
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+
+        if not hum or hum.Health <= 0 or not head or not hrp then
+            continue
+        end
+
+        local headPos, headOnScreen = Camera:WorldToViewportPoint(head.Position)
+        local rootPos, rootOnScreen = Camera:WorldToViewportPoint(hrp.Position)
+
+        if not headOnScreen or not rootOnScreen or headPos.Z <= 0 or rootPos.Z <= 0 then
+            continue
+        end
+
+        local distFromCenter = (Vector2.new(headPos.X, headPos.Y) - screenCenter).Magnitude
+        local worldDist = (cameraPos - hrp.Position).Magnitude
+
+        local vel = hrp.AssemblyLinearVelocity or hrp.Velocity or Vector3.zero
+
+        -- FIX #8: Visibility-first targeting - check LOS immediately for aimbot candidates
+        local isVisible = false
+        if distFromCenter <= Features.AimFOV and worldDist <= Features.RenderDistance then
+            isVisible = IsVisibleCached(head, char, true)
+        end
+
+        local state = {
+            Player = p,
+            Character = char,
+            Humanoid = hum,
+            Head = head,
+            HRP = hrp,
+            HeadPos = headPos,
+            RootPos = rootPos,
+            Distance = worldDist,
+            DistFromCenter = distFromCenter,
+            Velocity = vel,
+            IsVisible = isVisible,
+        }
+
+        EntityState[p] = state
+
+        if distFromCenter <= Features.AimFOV and worldDist <= Features.RenderDistance then
+            table.insert(CachedTargets, state)
+        end
+    end
+end
+
+-- =============================================
+-- AIM TARGETING (FIX #8: Visibility-first)
+-- =============================================
+local targetSnapshot = nil
+local targetSnapshotPlayer = nil
+
 local function GetBestTarget()
     if #CachedTargets == 0 then return nil, nil end
 
@@ -1260,28 +1300,20 @@ local function GetBestTarget()
     local bestPlayer = nil
 
     for _, target in ipairs(CachedTargets) do
-        if not target.Head or not target.Head.Parent then
-            continue
-        end
-        if not target.HRP or not target.HRP.Parent then
-            continue
-        end
-        if not target.Humanoid or target.Humanoid.Health <= 0 then
-            continue
-        end
+        if not target.IsVisible then continue end
+        if not target.Head or not target.Head.Parent then continue end
+        if not target.HRP or not target.HRP.Parent then continue end
+        if not target.Humanoid or target.Humanoid.Health <= 0 then continue end
 
         local crosshairWeight = target.DistFromCenter * 0.7
         local distanceWeight = (target.Distance / 10) * 0.2
         local velocityPenalty = target.Velocity.Magnitude * 0.1
-
         local score = crosshairWeight + distanceWeight + velocityPenalty
 
         if score < bestScore then
-            if IsVisibleCached(target.Head, target.Character) then
-                bestScore = score
-                bestTarget = target.Head
-                bestPlayer = target.Player
-            end
+            bestScore = score
+            bestTarget = target.Head
+            bestPlayer = target.Player
         end
     end
 
@@ -1295,16 +1327,14 @@ local LastESP = 0
 local ESPThrottle = 0.016
 local LastTargetScan = 0
 local TargetScanInterval = 0.25
-
-local RenderSnapshots = {}
-
--- FIX #5: Smoothed FPS tracking
 local SmoothedFPS = 60
+local LastFrameTime = tick()
+local LastFOVRadius = Features.AimFOV
+local LastFOVVisible = false
 
 local function UpdateESPThrottle(dt)
     local instantFPS = 1 / dt
     SmoothedFPS = SmoothedFPS * 0.9 + instantFPS * 0.1
-
     if SmoothedFPS < 30 then
         ESPThrottle = 0.05
     elseif SmoothedFPS < 45 then
@@ -1316,73 +1346,63 @@ local function UpdateESPThrottle(dt)
     end
 end
 
--- FIX #3: Bounding box cache
-local BoundingBoxCache = {}
-local BoundingBoxCacheInterval = 0.2
-local LastBoundingBoxUpdate = 0
+Janitor:Connect(RunService.RenderStepped, function(dt)
+    local now = tick()
+    local smoothDt = math.clamp(now - LastFrameTime, 0.001, 0.1)
+    LastFrameTime = now
+    UpdateESPThrottle(smoothDt)
+    CleanupOcclusionCache(now)
 
-local function UpdateBoundingBoxCache(now)
-    if now - LastBoundingBoxUpdate < BoundingBoxCacheInterval then return end
-    LastBoundingBoxUpdate = now
+    -- FIX #7: Dynamic scan interval based on aim state
+    local scanInterval = Features.AimActive and 0.05 or 0.25
+    if now - LastTargetScan >= scanInterval then
+        LastTargetScan = now
+        UpdateEntityState()
+    end
 
-    for player, data in pairs(ESP) do
-        local char = player.Character
-        if char then
-            local success, cf, size = pcall(function()
-                return char:GetBoundingBox()
-            end)
-            if success and cf and size then
-                BoundingBoxCache[player] = {
-                    CFrame = cf,
-                    Size = size,
-                    Time = now,
-                }
+    -- FOV Circle (FIX #6: Only update properties when changed)
+    if FOVCircle then
+        local shouldShow = Features.AlwaysShowFOV and Features.AimAssist or (Features.AimAssist and Features.AimActive)
+        if LastFOVVisible ~= shouldShow then
+            FOVCircle.Visible = shouldShow
+            LastFOVVisible = shouldShow
+        end
+
+        if shouldShow then
+            local screenCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+            if DrawingState[FOVCircle] == nil then
+                DrawingState[FOVCircle] = {Position = nil, Radius = nil, Color = nil}
+            end
+            local fovState = DrawingState[FOVCircle]
+
+            if fovState.Position ~= screenCenter then
+                FOVCircle.Position = screenCenter
+                fovState.Position = screenCenter
+            end
+            if fovState.Radius ~= Features.AimFOV then
+                FOVCircle.Radius = Features.AimFOV
+                fovState.Radius = Features.AimFOV
+            end
+            if fovState.Color ~= Features.ESPColor then
+                FOVCircle.Color = Features.ESPColor
+                fovState.Color = Features.ESPColor
+            end
+            if math.abs(LastFOVRadius - Features.AimFOV) > 0.5 then
+                LastFOVRadius = Features.AimFOV
+                FOVCircle.NumSides = Features.AimFOV < 80 and 32 or (Features.AimFOV < 160 and 48 or 64)
             end
         end
     end
-end
 
-Janitor:Connect(RunService.RenderStepped, function(dt)
-    local now = tick()
-
-    UpdateESPThrottle(dt)
-
-    -- =============================================
-    -- TARGET CACHE UPDATE
-    -- =============================================
-    if now - LastTargetScan >= TargetScanInterval then
-        LastTargetScan = now
-        UpdateTargetCache()
-    end
-
-    -- FIX #3: Update bounding box cache
-    UpdateBoundingBoxCache(now)
-
-    -- FIX #7: Update FOV circle sides if radius changed
-    if FOVCircle then
-        FOVCircle.NumSides = Features.AimFOV < 80 and 32 or (Features.AimFOV < 160 and 48 or 64)
-    end
-
-    -- =============================================
     -- AIMBOT
-    -- =============================================
     if targetSnapshot and targetSnapshotPlayer then
-        local char = targetSnapshotPlayer.Character
-        local hum = char and char:FindFirstChildOfClass("Humanoid")
-        local head = char and char:FindFirstChild("Head")
-
-        if not hum or hum.Health <= 0 or not head or head ~= targetSnapshot then
+        local state = EntityState[targetSnapshotPlayer]
+        if not state or not state.Head or state.Head ~= targetSnapshot or state.Humanoid.Health <= 0 then
             targetSnapshot = nil
             targetSnapshotPlayer = nil
-        else
-            local pos, onScreen = Camera:WorldToViewportPoint(head.Position)
-            if not onScreen then
-                targetSnapshot = nil
-                targetSnapshotPlayer = nil
-            elseif not IsVisibleCached(head, char) then
-                targetSnapshot = nil
-                targetSnapshotPlayer = nil
-            end
+        elseif not state.IsVisible then
+            targetSnapshot = nil
+            targetSnapshotPlayer = nil
         end
     end
 
@@ -1397,16 +1417,13 @@ Janitor:Connect(RunService.RenderStepped, function(dt)
     if Features.AimAssist and Features.AimActive and targetSnapshot then
         local smoothFactor = math.clamp(1 - (Features.AimSmoothness / 200), 0.02, 1.0)
         local baseAlpha = (Features.AimStrength / 100) * smoothFactor
-        local fpsCompensatedAlpha = math.clamp(baseAlpha * (dt * 60), 0.01, 1.0)
+        local fpsCompensatedAlpha = math.clamp(baseAlpha * (smoothDt * 60), 0.01, 1.0)
 
         local aimTarget = targetSnapshot
         if Features.AutoHeadshot and targetSnapshotPlayer then
-            local char = targetSnapshotPlayer.Character
-            if char then
-                local head = char:FindFirstChild("Head")
-                if head then
-                    aimTarget = head
-                end
+            local state = EntityState[targetSnapshotPlayer]
+            if state and state.Head then
+                aimTarget = state.Head
             end
         end
 
@@ -1415,32 +1432,17 @@ Janitor:Connect(RunService.RenderStepped, function(dt)
             if Features.PredictionMs > 0 then
                 local hrp = aimTarget.Parent:FindFirstChild("HumanoidRootPart")
                 if hrp then
-                    -- FIX #10: Prediction in milliseconds (converted to seconds)
                     local vel = hrp.AssemblyLinearVelocity or hrp.Velocity or Vector3.zero
                     predictedPos = aimTarget.Position + (vel * (Features.PredictionMs / 1000))
                 end
             end
-
             local targetCFrame = CFrame.new(Camera.CFrame.Position, predictedPos)
             Camera.CFrame = Camera.CFrame:Lerp(targetCFrame, fpsCompensatedAlpha)
         end
     end
 
-    -- FOV Circle
-    if Executor.Drawing and FOVCircle then
-        local screenCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
-        FOVCircle.Position = screenCenter
-        FOVCircle.Radius = Features.AimFOV
-        FOVCircle.Color = Features.ESPColor
-        if Features.AlwaysShowFOV then
-            FOVCircle.Visible = Features.AimAssist
-        else
-            FOVCircle.Visible = Features.AimAssist and Features.AimActive
-        end
-    end
-
     -- =============================================
-    -- ESP (Throttled, modular)
+    -- ESP (Throttled)
     -- =============================================
     if now - LastESP < ESPThrottle then return end
     LastESP = now
@@ -1448,92 +1450,98 @@ Janitor:Connect(RunService.RenderStepped, function(dt)
 
     local myChar = LocalPlayer.Character
     local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+    local color = Features.ESPColor
 
-    table.clear(RenderSnapshots)
+    for player, state in pairs(EntityState) do
+        local data = ESP[player]
+        if not data then continue end
 
-    for player, data in pairs(ESP) do
-        data.Tracer.Visible = false
-        data.Line.Visible = false
-        for _, l in pairs(data.Skeleton) do if l then l.Visible = false end end
-        for _, l in pairs(data.Box) do if l then l.Visible = false end end
+        -- FIX #10: Batch hide all drawings using state diffing
+        SetLineState(data.Tracer, nil, nil, nil, nil, false)
+        SetLineState(data.Line, nil, nil, nil, nil, false)
+        for _, l in pairs(data.Skeleton) do
+            SetLineState(l, nil, nil, nil, nil, false)
+        end
+        for _, l in pairs(data.Box) do
+            SetLineState(l, nil, nil, nil, nil, false)
+        end
 
         if data.IsDead then continue end
 
-        local char = player.Character
-        local hum = char and char:FindFirstChildOfClass("Humanoid")
-        local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        local head = char and char:FindFirstChild("Head")
+        local char = state.Character
+        local hum = state.Humanoid
+        local hrp = state.HRP
+        local head = state.Head
+        local rootPos = state.RootPos
+        local headPos = state.HeadPos
+        local distance = state.Distance
 
         if not char or not hum or hum.Health <= 0 or not hrp or not head then
             continue
         end
 
-        -- Team check in render
-        if Features.TeamCheck then
-            local myTeam = LocalPlayer.Team
-            local theirTeam = player.Team
-            if myTeam ~= nil and theirTeam ~= nil and theirTeam == myTeam then
-                continue
-            end
-        end
-
-        local rootPos, rootOnScreen = Camera:WorldToViewportPoint(hrp.Position)
-        if not rootOnScreen or rootPos.Z < 0 then
+        if distance > Features.RenderDistance then
             continue
         end
-
-        local headPos, headOnScreen = Camera:WorldToViewportPoint(head.Position)
-        if not headOnScreen or headPos.Z < 0 then
-            continue
-        end
-
-        local distance = (Camera.CFrame.Position - hrp.Position).Magnitude
-
-        table.insert(RenderSnapshots, {
-            Player = player,
-            Data = data,
-            Character = char,
-            Head = head,
-            HRP = hrp,
-            RootPos = rootPos,
-            HeadPos = headPos,
-            Distance = distance,
-        })
-    end
-
-    for _, snap in ipairs(RenderSnapshots) do
-        local data = snap.Data
-        local char = snap.Character
-        local head = snap.Head
-        local hrp = snap.HRP
-        local rootPos = snap.RootPos
-        local headPos = snap.HeadPos
-        local distance = snap.Distance
 
         local distScale = math.clamp(3.5 - (distance / 300), 0.5, 3.5)
-        local color = Features.ESPColor
 
-        -- SKELETON (FIX #4: Use cached parts)
+        -- SKELETON (with stale validation)
         if Features.SkeletonESP then
-            local cachedParts = PlayerSkeletonParts[snap.Player]
+            local cachedParts = PlayerSkeletonParts[player]
+            local needsRecache = false
+
             if cachedParts then
-                for i, parts in ipairs(cachedParts) do
-                    local p0 = parts[1]
-                    local p1 = parts[2]
-                    local line = data.Skeleton[i]
-                    -- Validate cached parts still exist
-                    if p0 and p0.Parent and p1 and p1.Parent and line then
-                        local v0, vis0 = Camera:WorldToViewportPoint(p0.Position)
-                        local v1, vis1 = Camera:WorldToViewportPoint(p1.Position)
-                        if vis0 and vis1 and v0.Z > 0 and v1.Z > 0 then
-                            line.From = Vector2.new(v0.X, v0.Y)
-                            line.To = Vector2.new(v1.X, v1.Y)
-                            line.Color = color
-                            line.Thickness = ThicknessSettings.Skeleton * distScale
-                            line.Visible = true
+                if tick() - (data.LastSkeletonValidation or 0) > 2 then
+                    for _, parts in ipairs(cachedParts) do
+                        if not parts[1] or not parts[1].Parent or not parts[2] or not parts[2].Parent then
+                            needsRecache = true
+                            break
+                        end
+                    end
+                    if not needsRecache then
+                        data.LastSkeletonValidation = tick()
+                    end
+                end
+
+                if not needsRecache then
+                    for i, parts in ipairs(cachedParts) do
+                        local p0 = parts[1]
+                        local p1 = parts[2]
+                        local line = data.Skeleton[i]
+                        if p0 and p0.Parent and p1 and p1.Parent and line then
+                            local v0, vis0 = Camera:WorldToViewportPoint(p0.Position)
+                            local v1, vis1 = Camera:WorldToViewportPoint(p1.Position)
+                            if vis0 and vis1 and v0.Z > 0 and v1.Z > 0 then
+                                SetLineState(line,
+                                    Vector2.new(v0.X, v0.Y),
+                                    Vector2.new(v1.X, v1.Y),
+                                    color,
+                                    ThicknessSettings.Skeleton * distScale,
+                                    true
+                                )
+                            end
                         end
                     end
                 end
+            else
+                needsRecache = true
+            end
+
+            if needsRecache then
+                local function doRecache(c)
+                    if not c then return end
+                    local parts = {}
+                    local connections = GetSkeleton(c)
+                    for _, bones in ipairs(connections) do
+                        local p0 = c:FindFirstChild(bones[1])
+                        local p1 = c:FindFirstChild(bones[2])
+                        table.insert(parts, {p0, p1, bones[1], bones[2]})
+                    end
+                    PlayerSkeletonParts[player] = parts
+                    data.LastSkeletonValidation = tick()
+                end
+                doRecache(char)
             end
         end
 
@@ -1541,71 +1549,76 @@ Janitor:Connect(RunService.RenderStepped, function(dt)
         if Features.TracerESP and myRoot then
             local myPos, myVis = Camera:WorldToViewportPoint(myRoot.Position + Vector3.new(0, 2, 0))
             if myVis and myPos.Z > 0 then
-                data.Tracer.From = Vector2.new(myPos.X, myPos.Y)
-                data.Tracer.To = Vector2.new(rootPos.X, rootPos.Y)
-                data.Tracer.Color = color
-                data.Tracer.Thickness = ThicknessSettings.Tracer * distScale
-                data.Tracer.Visible = true
+                SetLineState(data.Tracer,
+                    Vector2.new(myPos.X, myPos.Y),
+                    Vector2.new(rootPos.X, rootPos.Y),
+                    color,
+                    ThicknessSettings.Tracer * distScale,
+                    true
+                )
             end
         end
 
-        -- BOX ESP (FIX #3: Use cached bounding box)
+        -- BOX ESP (FIX #2: Precomputed offsets, no CFrame allocations)
         if Features.BoxESP then
-            local boxCache = BoundingBoxCache[snap.Player]
+            local boxCache = BoundingBoxCache[player]
+            if not boxCache or (now - boxCache.Time) > 0.2 then
+                local success, cf, size = pcall(function()
+                    return char:GetBoundingBox()
+                end)
+                if success and cf and size then
+                    boxCache = {
+                        CFrame = cf,
+                        Size = size,
+                        Time = now,
+                    }
+                    BoundingBoxCache[player] = boxCache
+                end
+            end
+
             if boxCache and boxCache.CFrame and boxCache.Size then
                 local cf = boxCache.CFrame
                 local size = boxCache.Size
-
-                local corners = {
-                    cf * CFrame.new(size.X/2, size.Y/2, size.Z/2),
-                    cf * CFrame.new(-size.X/2, size.Y/2, size.Z/2),
-                    cf * CFrame.new(size.X/2, size.Y/2, -size.Z/2),
-                    cf * CFrame.new(-size.X/2, size.Y/2, -size.Z/2),
-                    cf * CFrame.new(size.X/2, -size.Y/2, size.Z/2),
-                    cf * CFrame.new(-size.X/2, -size.Y/2, size.Z/2),
-                    cf * CFrame.new(size.X/2, -size.Y/2, -size.Z/2),
-                    cf * CFrame.new(-size.X/2, -size.Y/2, -size.Z/2),
-                }
+                local pos = cf.Position
+                local right = cf.RightVector
+                local up = cf.UpVector
+                local back = cf.LookVector
 
                 local minX, minY = math.huge, math.huge
                 local maxX, maxY = -math.huge, -math.huge
                 local anyVisible = false
 
-                for _, cornerCF in ipairs(corners) do
-                    local pos, onScreen = Camera:WorldToViewportPoint(cornerCF.Position)
-                    if onScreen and pos.Z > 0 then
+                -- FIX #2: Use precomputed offsets with VectorToWorldSpace logic
+                for i = 1, 8 do
+                    local offset = BoxOffsets[i]
+                    local worldPos = pos
+                        + right * (offset.X * size.X)
+                        + up * (offset.Y * size.Y)
+                        + back * (offset.Z * size.Z)
+
+                    local vp, onScreen = Camera:WorldToViewportPoint(worldPos)
+                    if onScreen and vp.Z > 0 then
                         anyVisible = true
-                        minX = math.min(minX, pos.X)
-                        minY = math.min(minY, pos.Y)
-                        maxX = math.max(maxX, pos.X)
-                        maxY = math.max(maxY, pos.Y)
+                        local v2 = Vector2.new(vp.X, vp.Y)
+                        ReusableCorners[i] = v2
+                        if vp.X < minX then minX = vp.X end
+                        if vp.Y < minY then minY = vp.Y end
+                        if vp.X > maxX then maxX = vp.X end
+                        if vp.Y > maxY then maxY = vp.Y end
                     end
                 end
 
                 if anyVisible then
-                    data.Box[1].From = Vector2.new(minX, minY)
-                    data.Box[1].To = Vector2.new(maxX, minY)
-                    data.Box[1].Color = color
-                    data.Box[1].Thickness = ThicknessSettings.Box * distScale
-                    data.Box[1].Visible = true
+                    local tl = Vector2.new(minX, minY)
+                    local tr = Vector2.new(maxX, minY)
+                    local br = Vector2.new(maxX, maxY)
+                    local bl = Vector2.new(minX, maxY)
+                    local thick = ThicknessSettings.Box * distScale
 
-                    data.Box[2].From = Vector2.new(maxX, minY)
-                    data.Box[2].To = Vector2.new(maxX, maxY)
-                    data.Box[2].Color = color
-                    data.Box[2].Thickness = ThicknessSettings.Box * distScale
-                    data.Box[2].Visible = true
-
-                    data.Box[3].From = Vector2.new(maxX, maxY)
-                    data.Box[3].To = Vector2.new(minX, maxY)
-                    data.Box[3].Color = color
-                    data.Box[3].Thickness = ThicknessSettings.Box * distScale
-                    data.Box[3].Visible = true
-
-                    data.Box[4].From = Vector2.new(minX, maxY)
-                    data.Box[4].To = Vector2.new(minX, minY)
-                    data.Box[4].Color = color
-                    data.Box[4].Thickness = ThicknessSettings.Box * distScale
-                    data.Box[4].Visible = true
+                    SetLineState(data.Box[1], tl, tr, color, thick, true)
+                    SetLineState(data.Box[2], tr, br, color, thick, true)
+                    SetLineState(data.Box[3], br, bl, color, thick, true)
+                    SetLineState(data.Box[4], bl, tl, color, thick, true)
                 end
             else
                 -- Fallback
@@ -1616,30 +1629,17 @@ Janitor:Connect(RunService.RenderStepped, function(dt)
                     local centerX = rootPos.X
                     local topY = headPos.Y - boxHeight * 0.1
                     local botY = legPos.Y
+                    local thick = ThicknessSettings.Box * distScale
 
-                    data.Box[1].From = Vector2.new(centerX - boxWidth/2, topY)
-                    data.Box[1].To = Vector2.new(centerX + boxWidth/2, topY)
-                    data.Box[1].Color = color
-                    data.Box[1].Thickness = ThicknessSettings.Box * distScale
-                    data.Box[1].Visible = true
+                    local tl = Vector2.new(centerX - boxWidth/2, topY)
+                    local tr = Vector2.new(centerX + boxWidth/2, topY)
+                    local br = Vector2.new(centerX + boxWidth/2, botY)
+                    local bl = Vector2.new(centerX - boxWidth/2, botY)
 
-                    data.Box[2].From = Vector2.new(centerX + boxWidth/2, topY)
-                    data.Box[2].To = Vector2.new(centerX + boxWidth/2, botY)
-                    data.Box[2].Color = color
-                    data.Box[2].Thickness = ThicknessSettings.Box * distScale
-                    data.Box[2].Visible = true
-
-                    data.Box[3].From = Vector2.new(centerX + boxWidth/2, botY)
-                    data.Box[3].To = Vector2.new(centerX - boxWidth/2, botY)
-                    data.Box[3].Color = color
-                    data.Box[3].Thickness = ThicknessSettings.Box * distScale
-                    data.Box[3].Visible = true
-
-                    data.Box[4].From = Vector2.new(centerX - boxWidth/2, botY)
-                    data.Box[4].To = Vector2.new(centerX - boxWidth/2, topY)
-                    data.Box[4].Color = color
-                    data.Box[4].Thickness = ThicknessSettings.Box * distScale
-                    data.Box[4].Visible = true
+                    SetLineState(data.Box[1], tl, tr, color, thick, true)
+                    SetLineState(data.Box[2], tr, br, color, thick, true)
+                    SetLineState(data.Box[3], br, bl, color, thick, true)
+                    SetLineState(data.Box[4], bl, tl, color, thick, true)
                 end
             end
         end
@@ -1647,11 +1647,35 @@ Janitor:Connect(RunService.RenderStepped, function(dt)
         -- LINE ESP
         if Features.LineESP then
             local bottomOffset = isMobile and 120 or 80
-            data.Line.From = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y - bottomOffset)
-            data.Line.To = Vector2.new(rootPos.X, rootPos.Y)
-            data.Line.Color = color
-            data.Line.Thickness = ThicknessSettings.Line * distScale
-            data.Line.Visible = true
+            SetLineState(data.Line,
+                Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y - bottomOffset),
+                Vector2.new(rootPos.X, rootPos.Y),
+                color,
+                ThicknessSettings.Line * distScale,
+                true
+            )
+        end
+    end
+end)
+
+-- =============================================
+-- CHARACTER LIFECYCLE CLEANUP (FIX #5)
+-- =============================================
+Janitor:Connect(Players.PlayerRemoving, function(player)
+    RemoveESP(player)
+    EntityState[player] = nil
+end)
+
+-- Cleanup on character destroy
+Janitor:Connect(workspace.DescendantRemoving, function(desc)
+    if desc:IsA("Model") then
+        for player, state in pairs(EntityState) do
+            if state.Character == desc then
+                state.Humanoid = nil
+                state.Head = nil
+                state.HRP = nil
+                state.IsVisible = false
+            end
         end
     end
 end)
